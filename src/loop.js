@@ -10,6 +10,12 @@ import {
   loadTraceability,
   evidenceExists,
 } from "./evidence.js";
+import {
+  commitProjection,
+  loadLatestProjection,
+  verifyLineage,
+  sha256,
+} from "./lineage.js";
 
 const tools = { read_file: readFile };
 
@@ -225,11 +231,20 @@ function isPersistedJudgmentRef(ref, workspaceRoot) {
     )
   );
 
+  const ledgerDir = normalizePath(
+    path.relative(
+      workspaceRoot,
+      path.join(workspaceRoot, ".eos", "judgments")
+    )
+  );
+
   const normalizedRef = normalizePath(ref).replace(/^\.\//, "");
 
   return (
     normalizedRef === judgmentFile ||
-    normalizedRef.endsWith(`/${judgmentFile}`)
+    normalizedRef.endsWith(`/${judgmentFile}`) ||
+    normalizedRef === ledgerDir ||
+    normalizedRef.startsWith(`${ledgerDir}/`)
   );
 }
 
@@ -378,7 +393,16 @@ function canonicalizeEvidenceRefs(
 
 async function runEos(userInput, { workspace, chatFn = chat, maxIterations = 10 } = {}) {
   const workspaceRoot = path.resolve(workspace);
+  const lineage = verifyLineage(workspaceRoot);
   let previousStatus = loadJudgmentStatus(workspaceRoot);
+
+  if (lineage.state === "inconsistent") {
+    console.warn(
+      `[eos] persisted lineage is inconsistent (${lineage.reason}); treating as fresh state`
+    );
+    previousStatus = null;
+  }
+
   const investigation = createInvestigation(userInput);
 
   const evidence = loadEvidence(workspaceRoot);
@@ -398,6 +422,7 @@ async function runEos(userInput, { workspace, chatFn = chat, maxIterations = 10 
 
   let finalJudgment = null;
   let restrictions = [];
+  let commitReason = "judgment";
 
   for (let i = 0; i < maxIterations; i++) {
     const response = await chatFn(messages);
@@ -527,6 +552,8 @@ async function runEos(userInput, { workspace, chatFn = chat, maxIterations = 10 
   }
 
   if (!finalJudgment) {
+    commitReason = "fallback";
+
     const fallbackState = isJudgmentState(previousStatus)
       ? previousStatus
       : "blocked";
@@ -541,8 +568,33 @@ async function runEos(userInput, { workspace, chatFn = chat, maxIterations = 10 
     ];
   }
 
-  const surface = buildSurface(userInput, investigation, finalJudgment, restrictions, evidence, knowledge, decisions, traceability);
-  writeSurface(workspaceRoot, surface);
+  let previousJudgmentId = null;
+  let previousJudgmentDigest = null;
+
+  if (lineage.state !== "inconsistent") {
+    const latest = loadLatestProjection(workspaceRoot);
+
+    if (latest !== null) {
+      previousJudgmentId = latest.surface.judgment_id;
+      previousJudgmentDigest = latest.digest;
+    }
+  }
+
+  const surface = buildSurface(
+    userInput,
+    investigation,
+    finalJudgment,
+    restrictions,
+    evidence,
+    knowledge,
+    decisions,
+    traceability,
+    previousJudgmentId,
+    previousJudgmentDigest,
+    commitReason
+  );
+
+  commitProjection(workspaceRoot, surface);
 
   return surface;
 }
@@ -577,6 +629,7 @@ function buildEvidenceBlock(
     inspections: inspections.map((inspection) => ({
       ok: inspection.ok,
       path: inspection.path,
+      digest: typeof inspection.content === "string" ? sha256(inspection.content) : null,
     })),
     knowledge:
       knowledge === undefined
@@ -613,7 +666,7 @@ function buildEvidenceBlock(
   };
 }
 
-  function buildSurface(userInput, investigation, judgment, restrictions, evidence, knowledge, decisions, traceability) {
+  function buildSurface(userInput, investigation, judgment, restrictions, evidence, knowledge, decisions, traceability, previousJudgmentId = null, previousJudgmentDigest = null, commitReason = "judgment") {
     const gaps = investigation.requiredFiles.filter(
       (file) => !investigation.inspectedFiles.has(file)
     );
@@ -630,6 +683,9 @@ function buildEvidenceBlock(
       investigation_id: investigationId,
       recorded_at: recordedAt,
       status,
+      previous_judgment_id: previousJudgmentId,
+      previous_judgment_digest: previousJudgmentDigest,
+      commit_reason: commitReason,
       investigation: {
         target: investigation.target,
         required_evidence: investigation.requiredFiles,
@@ -651,20 +707,6 @@ function buildEvidenceBlock(
       restrictions,
     };
   }
-
-function writeSurface(workspaceRoot, surface) {
-  const eosDir = path.join(workspaceRoot, ".eos");
-
-  if (!fs.existsSync(eosDir)) {
-    fs.mkdirSync(eosDir, { recursive: true });
-  }
-
-  const finalPath = path.join(eosDir, "judgment.json");
-  const tmpPath = path.join(eosDir, "judgment.json.tmp");
-
-  fs.writeFileSync(tmpPath, JSON.stringify(surface, null, 2) + "\n");
-  fs.renameSync(tmpPath, finalPath);
-}
 
 export {
   runEos,
