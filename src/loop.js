@@ -16,6 +16,11 @@ import {
   verifyLineage,
   sha256,
 } from "./lineage.js";
+import {
+  buildKnowledgeProjection,
+  isKnowledgeRef,
+  isKnowledgeEntityRef,
+} from "./knowledge.js";
 
 const tools = { read_file: readFile };
 
@@ -48,14 +53,25 @@ When investigating, gather the evidence required before returning a judgment.
       KNOWLEDGE before attempting filesystem inspection.
       Package names are identities, not filesystem paths. For example, @ewa/agent
       is a package identity and must not be converted into packages/@ewa/agent.
+      Cite specific knowledge entities when a claim is about a specific entity:
+      - symbol:<name> for a symbol listed under SYMBOLS
+      - package:<name> for a package listed under PACKAGES
+      - import:<file>-><resolvedFile> for an import listed under IMPORTS
+      - export:<file>:<symbol> for an export listed under EXPORTS
+      - dependency:<package>-><dependency> for a dependency listed under
+        PACKAGE DEPENDENCIES
+      Never claim a symbol, package, import, export, or dependency exists unless it
+      is listed in the REPOSITORY KNOWLEDGE block. A specific knowledge ref that
+      does not match a listed entity is rejected.
       If REPOSITORY KNOWLEDGE directly supports a claim, cite "REPOSITORY KNOWLEDGE"
-      in evidence_refs.
+      or the specific knowledge entity ref in evidence_refs.
 
 Never claim to have inspected a file unless the read_file tool returned it.
 
 A declared or candidate claim MUST reference only:
 - files you actually inspected, or
-- evidence ids listed in the ENGINEERING EVIDENCE block below.
+- evidence ids listed in the ENGINEERING EVIDENCE block below, or
+- knowledge refs listed in the REPOSITORY KNOWLEDGE block below.
 
 For an inspected file, evidence_refs MUST use the file path returned by
 read_file, or the exact repository-relative path represented by that result.
@@ -114,10 +130,11 @@ function buildSubstrateContext(evidence, knowledge, decisions, traceability) {
   const parts = [];
 
   if (knowledge !== undefined) {
-    const repo = knowledge.knowledge.repository ?? {};
-    parts.push(
-      `REPOSITORY KNOWLEDGE\nRoot: ${repo.root}\nPackages: ${(repo.packages ?? []).join(", ")}\nSource files: ${repo.sourceFiles ?? 0}\nSymbols: ${(knowledge.knowledge.symbols ?? []).length}`
-    );
+    const projection = buildKnowledgeProjection(knowledge);
+
+    if (projection !== undefined) {
+      parts.push(projection);
+    }
   }
 
   if (evidence.length > 0) {
@@ -248,10 +265,11 @@ function isPersistedJudgmentRef(ref, workspaceRoot) {
   );
 }
 
-function canonicalizeEvidenceRefs(
+  function canonicalizeEvidenceRefs(
     judgment,
     workspaceRoot,
-    evidence = []
+    evidence = [],
+    knowledge = undefined
   ) {
     const absoluteRoot = normalizePath(workspaceRoot);
 
@@ -264,6 +282,12 @@ function canonicalizeEvidenceRefs(
           : []
       ).map((ref) => {
         if (typeof ref !== "string") return ref;
+
+        // Knowledge references are canonical as-is (blanket or specific
+        // entity refs). Never normalize them as filesystem paths.
+        if (isKnowledgeRef(ref, knowledge)) {
+          return ref;
+        }
 
         // Canonical substrate reference.
         if (ref === "REPOSITORY KNOWLEDGE") {
@@ -360,9 +384,7 @@ function canonicalizeEvidenceRefs(
       const backedByEvidenceStore =
         evidenceExists(evidence, ref);
 
-      const backedByKnowledge =
-        ref === "REPOSITORY KNOWLEDGE" &&
-        knowledge !== undefined;
+      const backedByKnowledge = isKnowledgeRef(ref, knowledge);
 
       const persistedJudgmentRef =
         workspaceRoot !== undefined &&
@@ -379,11 +401,19 @@ function canonicalizeEvidenceRefs(
       );
     });
     if (missing.length > 0) {
+      const knowledgeLike = missing.filter((ref) => isKnowledgeEntityRef(ref));
+
+      const message =
+        knowledgeLike.length > 0
+          ? `Claim "${item.claim}" cites knowledge refs not present in the REPOSITORY KNOWLEDGE block: ${knowledgeLike.join(", ")}. Never claim a symbol, package, import, export, or dependency exists unless it is listed there.`
+          : `Claim "${item.claim}" references evidence not inspected, not in the engineering evidence store, or not in the repository knowledge model: ${missing.join(", ")}`;
+
       return {
         ok: false,
         reason: "evidence",
         missing,
-        message: `Claim "${item.claim}" references evidence not inspected or not in the engineering evidence store: ${missing.join(", ")}`,
+        knowledge: knowledgeLike,
+        message,
       };
     }
   }
@@ -459,7 +489,7 @@ async function runEos(userInput, { workspace, chatFn = chat, maxIterations = 10 
         }
 
       const canonicalItems =
-        canonicalizeEvidenceRefs(items, workspaceRoot, evidence);
+        canonicalizeEvidenceRefs(items, workspaceRoot, evidence, knowledge);
 
       const gate = gateJudgment(
         canonicalItems,
@@ -480,7 +510,9 @@ async function runEos(userInput, { workspace, chatFn = chat, maxIterations = 10 
           content:
             gate.reason === "state"
               ? `You cannot finish yet. ${gate.message}`
-              : `You cannot finish yet. ${gate.message}. Inspect the required evidence before judging.`,
+              : gate.knowledge?.length > 0
+                ? `You cannot finish yet. ${gate.message}`
+                : `You cannot finish yet. ${gate.message}. Inspect the required evidence before judging.`,
         });
 
         continue;
