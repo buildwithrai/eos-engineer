@@ -82,12 +82,10 @@ async function runWithResponses(userInput, responses, options = {}) {
 /**
  * Attack: model tries to jump directly from blocked to declared.
  *
- * A fresh investigation is allowed to produce declared in the current
- * implementation, but a previously established blocked state must not
- * be silently treated as evidence-backed progression.
- *
- * This test intentionally checks that the surface remains governed by
- * the current judgment response rather than inventing historical support.
+ * A previously established blocked state must not advance to declared even
+ * when the later declared judgment carries valid inspected evidence.
+ * EOS must not treat the prior blocked judgment as evidence-backed
+ * progression, and must never auto-inspect files on the model's behalf.
  */
 async function testBlockedDoesNotBecomeEvidence() {
   freshWorkspace();
@@ -99,7 +97,15 @@ async function testBlockedDoesNotBecomeEvidence() {
 
   const second = await runWithResponses(
     "Investigate src/index.js and judge it.",
-    [judgment("declared", ["src/index.js"])]
+    [
+      {
+        type: "tool",
+        tool: "read_file",
+        input: { path: "src/index.js" },
+      },
+      judgment("declared", ["src/index.js"]),
+      judgment("blocked", []),
+    ]
   );
 
   assert(
@@ -108,8 +114,13 @@ async function testBlockedDoesNotBecomeEvidence() {
   );
 
   assert(
-    "later declared judgment still requires real evidence",
-    second.surface.status === "blocked"
+    "blocked state does not become evidence",
+    first.surface.evidence.consumed.length === 0
+  );
+
+  assert(
+    "blocked to declared is rejected despite valid inspected evidence",
+    second.calls >= 3 && second.surface.status === "blocked"
   );
 }
 
@@ -484,6 +495,164 @@ async function testConflictingValidStatesUseBlockedPrecedence() {
   );
 }
 
+/**
+ * Attack: declared regresses to candidate.
+ *
+ * A persisted declared state must not be allowed to regress to candidate,
+ * even when the candidate claim carries valid inspected evidence.
+ */
+async function testDeclaredCannotRegressToCandidate() {
+  freshWorkspace();
+
+  const declared = await runWithResponses(
+    "Investigate src/index.js and judge it.",
+    [
+      {
+        type: "tool",
+        tool: "read_file",
+        input: { path: "src/index.js" },
+      },
+      judgment("declared", ["src/index.js"]),
+    ]
+  );
+
+  const regressed = await runWithResponses(
+    "Investigate src/index.js and judge it.",
+    [
+      {
+        type: "tool",
+        tool: "read_file",
+        input: { path: "src/index.js" },
+      },
+      judgment("candidate", ["src/index.js"]),
+      judgment("blocked", []),
+    ]
+  );
+
+  assert(
+    "initial declared state is established",
+    declared.surface.status === "declared"
+  );
+
+  assert(
+    "declared cannot regress to candidate despite valid evidence",
+    regressed.calls >= 3 && regressed.surface.status === "declared"
+  );
+
+  assert(
+    "persisted declared survives the rejected regression attempt",
+    regressed.surface.judgment[0].type === "declared"
+  );
+}
+
+/**
+ * Attack: model returns an evidence-requiring judgment without ever
+ * requesting a read_file.
+ *
+ * EOS must reject and retry the model rather than automatically
+ * inspecting evidence on the model's behalf.
+ */
+async function testJudgmentDoesNotTriggerAutomaticInspection() {
+  freshWorkspace();
+
+  const { surface, calls } = await runWithResponses(
+    "Investigate src/index.js and judge it.",
+    [judgment("declared", ["src/index.js"])],
+    { maxIterations: 3 }
+  );
+
+  assert(
+    "judgment does not auto-inspect evidence",
+    surface.evidence.inspections.length === 0
+  );
+
+  assert(
+    "judgment without inspection is rejected, not auto-satisfied",
+    calls === 3
+  );
+
+  assert(
+    "uninspected judgment cannot reach declared",
+    surface.status === "blocked"
+  );
+}
+
+/**
+ * Attack: the persisted .eos/judgment.json file is cited as evidence.
+ *
+ * A previous judgment projection must never be usable as evidence for a
+ * new judgment, even when the file was read via read_file.
+ */
+async function testPersistedJudgmentFileIsNotEvidence() {
+  freshWorkspace();
+
+  const first = await runWithResponses(
+    "Investigate src/index.js and judge it.",
+    [judgment("blocked", [])]
+  );
+
+  const second = await runWithResponses(
+    "Investigate src/index.js and judge it.",
+    [
+      {
+        type: "tool",
+        tool: "read_file",
+        input: { path: "src/index.js" },
+      },
+      {
+        type: "tool",
+        tool: "read_file",
+        input: { path: ".eos/judgment.json" },
+      },
+      judgment("candidate", ["src/index.js", ".eos/judgment.json"]),
+      judgment("blocked", []),
+    ]
+  );
+
+  assert(
+    "initial judgment is persisted",
+    first.surface.status === "blocked"
+  );
+
+  assert(
+    "persisted judgment file is rejected as evidence",
+    second.calls >= 4 && second.surface.status === "blocked"
+  );
+}
+
+/**
+ * Attack: model requests read_file for a non-required path.
+ *
+ * EOS must execute the path the model actually requested and must not
+ * silently rewrite it to a different required file.
+ */
+async function testReadFilePathIsNotRewritten() {
+  freshWorkspace();
+
+  const { surface } = await runWithResponses(
+    "Investigate src/index.js and judge it.",
+    [
+      {
+        type: "tool",
+        tool: "read_file",
+        input: { path: "src/other.js" },
+      },
+      judgment("blocked", []),
+    ]
+  );
+
+  assert(
+    "model-requested read_file path is executed as requested",
+    surface.evidence.inspections.length === 1 &&
+      surface.evidence.inspections[0].path.endsWith("src/other.js")
+  );
+
+  assert(
+    "requested path is not silently replaced with a required file",
+    !surface.investigation.inspected_evidence.includes("src/index.js")
+  );
+}
+
 async function main() {
   await testBlockedDoesNotBecomeEvidence();
   await testUninspectedEvidenceCannotElevateState();
@@ -497,6 +666,10 @@ async function main() {
   await testToolAfterBlockedDoesNotRetroactivelyValidate();
   await testIterationExhaustionCannotCommitUngatedJudgment();
   await testConflictingValidStatesUseBlockedPrecedence();
+  await testDeclaredCannotRegressToCandidate();
+  await testJudgmentDoesNotTriggerAutomaticInspection();
+  await testPersistedJudgmentFileIsNotEvidence();
+  await testReadFilePathIsNotRewritten();
 
   fs.rmSync(workspace, { recursive: true, force: true });
 

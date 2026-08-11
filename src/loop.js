@@ -35,14 +35,35 @@ Judgment types:
 
 When investigating, gather the evidence required before returning a judgment.
 
+      Repository knowledge is authoritative evidence for repository-level facts
+      already represented in the REPOSITORY KNOWLEDGE block.
+      For questions about package identity, package membership, repository inventory,
+      source files, symbols, imports, exports, or dependencies, consult REPOSITORY
+      KNOWLEDGE before attempting filesystem inspection.
+      Package names are identities, not filesystem paths. For example, @ewa/agent
+      is a package identity and must not be converted into packages/@ewa/agent.
+      If REPOSITORY KNOWLEDGE directly supports a claim, cite "REPOSITORY KNOWLEDGE"
+      in evidence_refs.
+
 Never claim to have inspected a file unless the read_file tool returned it.
 
 A declared or candidate claim MUST reference only:
 - files you actually inspected, or
 - evidence ids listed in the ENGINEERING EVIDENCE block below.
 
-Never invent an evidence id. An evidence_ref that does not resolve to inspected
-evidence or to a listed evidence id will be rejected.
+For an inspected file, evidence_refs MUST use the file path returned by
+read_file, or the exact repository-relative path represented by that result.
+Do not use labels such as "repository_content", "source", "file", or other
+descriptive aliases as evidence_refs.
+
+For example, if read_file returns:
+{"ok":true,"path":"/workspace/packages/workspace/src/indexer/RepositoryIndexer.ts",...}
+
+then the evidence_ref must identify that inspected file, such as:
+"packages/workspace/src/indexer/RepositoryIndexer.ts".
+
+Never invent an evidence id or evidence label. An evidence_ref that does not
+resolve to inspected evidence or to a listed evidence id will be rejected.
 `;
 
 function normalizePath(filePath) {
@@ -73,7 +94,7 @@ function createInvestigation(userInput) {
     target: userInput.split("\n")[0].slice(0, 200),
     requiredFiles: [...requiredFiles],
     inspectedFiles: new Set(),
-    evidence: [],
+    inspections: [],
   };
 }
 
@@ -178,7 +199,88 @@ function surfaceStatus(judgment) {
   return status;
 }
 
-function gateJudgment(judgment, investigation, evidence = []) {
+function loadJudgmentStatus(workspaceRoot) {
+  const file = path.join(workspaceRoot, ".eos", "judgment.json");
+
+  if (!fs.existsSync(file)) return null;
+
+  let parsed;
+
+  try {
+    parsed = JSON.parse(fs.readFileSync(file, "utf8"));
+  } catch {
+    return null;
+  }
+
+  return isJudgmentState(parsed?.status) ? parsed.status : null;
+}
+
+function isPersistedJudgmentRef(ref, workspaceRoot) {
+  if (typeof ref !== "string") return false;
+
+  const judgmentFile = normalizePath(
+    path.relative(
+      workspaceRoot,
+      path.join(workspaceRoot, ".eos", "judgment.json")
+    )
+  );
+
+  const normalizedRef = normalizePath(ref).replace(/^\.\//, "");
+
+  return (
+    normalizedRef === judgmentFile ||
+    normalizedRef.endsWith(`/${judgmentFile}`)
+  );
+}
+
+function canonicalizeEvidenceRefs(
+    judgment,
+    workspaceRoot,
+    evidence = []
+  ) {
+    const absoluteRoot = normalizePath(workspaceRoot);
+
+    return judgment.map((item) => ({
+      ...item,
+
+      evidence_refs: (
+        Array.isArray(item.evidence_refs)
+          ? item.evidence_refs
+          : []
+      ).map((ref) => {
+        if (typeof ref !== "string") return ref;
+
+        // Canonical substrate reference.
+        if (ref === "REPOSITORY KNOWLEDGE") {
+          return ref;
+        }
+
+        // Engineering evidence IDs are already canonical.
+        // Never normalize them as filesystem paths.
+        if (evidenceExists(evidence, ref)) {
+          return ref;
+        }
+
+        // Filesystem evidence references are canonicalized as
+        // workspace-relative paths.
+        const normalizedRef = normalizePath(ref);
+
+        if (normalizedRef.startsWith(absoluteRoot + "/")) {
+          return normalizedRef.slice(absoluteRoot.length + 1);
+        }
+
+        return normalizedRef;
+      }),
+    }));
+  }
+
+  function gateJudgment(
+  judgment,
+  investigation,
+  evidence = [],
+  knowledge = undefined,
+  workspaceRoot = undefined
+) {
   const inspected = [...investigation.inspectedFiles];
 
   for (const item of judgment) {
@@ -193,6 +295,21 @@ function gateJudgment(judgment, investigation, evidence = []) {
     }
 
     if (!state.requiresEvidence) continue;
+    if (!hasRequiredEvidence(investigation)) {
+      const missingRequired = investigation.requiredFiles.filter(
+        (file) => !investigation.inspectedFiles.has(file)
+      );
+
+      return {
+        ok: false,
+        reason: "evidence",
+        missing: missingRequired,
+        message:
+      `Claim "${item.claim}" cannot reach ${item.type} because required ` +
+      `investigation evidence has not been inspected: ${missingRequired.join(", ")}`,
+      };
+    }
+
 
     const refs = Array.isArray(item.evidence_refs) ? item.evidence_refs : [];
 
@@ -205,15 +322,47 @@ function gateJudgment(judgment, investigation, evidence = []) {
       };
     }
 
-    const missing = refs.filter(
-      (ref) =>
-        !inspected.some(
-          (file) =>
-            file === normalizePath(ref) ||
-            file.endsWith(`/${normalizePath(ref)}`)
-        ) && !evidenceExists(evidence, ref)
-    );
+    const missing = refs.filter((ref) => {
+      const normalizedRef = normalizePath(ref);
 
+      const directlyInspected = inspected.some(
+        (file) =>
+          file === normalizedRef ||
+          file.endsWith(`/${normalizedRef}`)
+      );
+
+      const requiredEvidenceInspected =
+        investigation.requiredFiles.some(
+          (requiredFile) =>
+            (
+              requiredFile === normalizedRef ||
+              requiredFile.endsWith(`/${normalizedRef}`) ||
+              normalizedRef.endsWith(`/${requiredFile}`)
+            ) &&
+            investigation.inspectedFiles.has(requiredFile)
+        );
+
+      const backedByEvidenceStore =
+        evidenceExists(evidence, ref);
+
+      const backedByKnowledge =
+        ref === "REPOSITORY KNOWLEDGE" &&
+        knowledge !== undefined;
+
+      const persistedJudgmentRef =
+        workspaceRoot !== undefined &&
+        isPersistedJudgmentRef(ref, workspaceRoot);
+
+      return (
+        persistedJudgmentRef ||
+        !(
+          directlyInspected ||
+          requiredEvidenceInspected ||
+          backedByEvidenceStore ||
+          backedByKnowledge
+        )
+      );
+    });
     if (missing.length > 0) {
       return {
         ok: false,
@@ -229,6 +378,7 @@ function gateJudgment(judgment, investigation, evidence = []) {
 
 async function runEos(userInput, { workspace, chatFn = chat, maxIterations = 10 } = {}) {
   const workspaceRoot = path.resolve(workspace);
+  let previousStatus = loadJudgmentStatus(workspaceRoot);
   const investigation = createInvestigation(userInput);
 
   const evidence = loadEvidence(workspaceRoot);
@@ -251,6 +401,9 @@ async function runEos(userInput, { workspace, chatFn = chat, maxIterations = 10 
 
   for (let i = 0; i < maxIterations; i++) {
     const response = await chatFn(messages);
+
+      console.log(`\n=== EOS ITERATION ${i + 1} MODEL RESPONSE ===`);
+      console.log(response?.content ?? "(empty)");
 
     let parsed;
 
@@ -280,13 +433,23 @@ async function runEos(userInput, { workspace, chatFn = chat, maxIterations = 10 
           continue;
         }
 
-      const gate = gateJudgment(items, investigation, evidence);
+      const canonicalItems =
+        canonicalizeEvidenceRefs(items, workspaceRoot, evidence);
+
+      const gate = gateJudgment(
+        canonicalItems,
+        investigation,
+        evidence,
+        knowledge,
+        workspaceRoot
+      );
 
       if (!gate.ok) {
         messages.push({
           role: "assistant",
           content: JSON.stringify(parsed),
         });
+
         messages.push({
           role: "user",
           content:
@@ -294,33 +457,28 @@ async function runEos(userInput, { workspace, chatFn = chat, maxIterations = 10 
               ? `You cannot finish yet. ${gate.message}`
               : `You cannot finish yet. ${gate.message}. Inspect the required evidence before judging.`,
         });
+
         continue;
       }
 
-      const hasUninspectedRequiredEvidence =
-        investigation.requiredFiles.some(
-          (file) => !investigation.inspectedFiles.has(file)
-        );
+      const nextStatus = surfaceStatus(canonicalItems);
 
-      if (
-        items.some(
-          (item) => item.type === "candidate" || item.type === "declared"
-        ) &&
-        hasUninspectedRequiredEvidence
-      ) {
+      if (!canTransition(previousStatus, nextStatus)) {
         messages.push({
           role: "assistant",
           content: JSON.stringify(parsed),
         });
+
         messages.push({
           role: "user",
-          content:
-            "You cannot finish with a candidate or declared judgment while required evidence remains uninspected. Inspect the remaining required evidence before judging.",
+          content: `You cannot finish yet. Judging as "${nextStatus}" is not a legal transition from the previous state "${previousStatus}". Legal transitions are blocked -> candidate -> declared.`,
         });
+
         continue;
       }
 
-      finalJudgment = items;
+      previousStatus = nextStatus;
+      finalJudgment = canonicalItems;
       restrictions = Array.isArray(parsed.restrictions) ? parsed.restrictions : [];
       break;
     }
@@ -334,24 +492,6 @@ async function runEos(userInput, { workspace, chatFn = chat, maxIterations = 10 
           content: `Unknown tool "${parsed.tool}". Use read_file.`,
         });
         continue;
-      }
-
-      if (parsed.tool === "read_file" && investigation.requiredFiles.length > 0) {
-        const requestedPath = parsed.input?.path;
-
-        const validRequestedPath =
-          typeof requestedPath === "string" &&
-          investigation.requiredFiles.includes(normalizePath(requestedPath));
-
-        if (!validRequestedPath) {
-          const nextRequiredFile = investigation.requiredFiles.find(
-            (file) => !investigation.inspectedFiles.has(file)
-          );
-
-          if (nextRequiredFile) {
-            parsed.input = { path: nextRequiredFile };
-          }
-        }
       }
 
       const result = await tool(parsed.input ?? {}, workspaceRoot);
@@ -372,7 +512,7 @@ async function runEos(userInput, { workspace, chatFn = chat, maxIterations = 10 
           }
         }
 
-        investigation.evidence.push(result);
+        investigation.inspections.push(result);
       }
 
       messages.push({ role: "assistant", content: JSON.stringify(parsed) });
@@ -387,10 +527,14 @@ async function runEos(userInput, { workspace, chatFn = chat, maxIterations = 10 
   }
 
   if (!finalJudgment) {
+    const fallbackState = isJudgmentState(previousStatus)
+      ? previousStatus
+      : "blocked";
+
     finalJudgment = [
       {
         claim: "Investigation iteration limit reached without judgment",
-        type: "blocked",
+        type: fallbackState,
         confidence: "low",
         evidence_refs: [...investigation.inspectedFiles],
       },
@@ -403,8 +547,16 @@ async function runEos(userInput, { workspace, chatFn = chat, maxIterations = 10 
   return surface;
 }
 
-function buildEvidenceBlock(evidence, knowledge, decisions, traceability, judgment) {
+function buildEvidenceBlock(
+  evidence,
+  inspections,
+  knowledge,
+  decisions,
+  traceability,
+  judgment
+) {
   const consumed = new Set();
+
   for (const item of judgment) {
     for (const ref of item.evidence_refs ?? []) {
       consumed.add(ref);
@@ -422,10 +574,15 @@ function buildEvidenceBlock(evidence, knowledge, decisions, traceability, judgme
       source,
       digest,
     })),
+    inspections: inspections.map((inspection) => ({
+      ok: inspection.ok,
+      path: inspection.path,
+    })),
     knowledge:
       knowledge === undefined
         ? undefined
         : {
+            id: "REPOSITORY KNOWLEDGE",
             source: knowledge.source,
             digest: knowledge.digest,
             generatedAt: knowledge.knowledge.generatedAt,
@@ -456,37 +613,44 @@ function buildEvidenceBlock(evidence, knowledge, decisions, traceability, judgme
   };
 }
 
-function buildSurface(userInput, investigation, judgment, restrictions, evidence, knowledge, decisions, traceability) {
-  const gaps = investigation.requiredFiles.filter(
-    (file) => !investigation.inspectedFiles.has(file)
-  );
+  function buildSurface(userInput, investigation, judgment, restrictions, evidence, knowledge, decisions, traceability) {
+    const gaps = investigation.requiredFiles.filter(
+      (file) => !investigation.inspectedFiles.has(file)
+    );
 
-  const recordedAt = new Date().toISOString();
-  const investigationId = crypto.randomUUID();
-  const judgmentId = crypto.randomUUID();
+    const recordedAt = new Date().toISOString();
+    const investigationId = crypto.randomUUID();
+    const judgmentId = crypto.randomUUID();
 
-  const status = surfaceStatus(judgment);
+    const status = surfaceStatus(judgment);
 
-  return {
-    schema: "eos-judgment/v1",
-    judgment_id: judgmentId,
-    investigation_id: investigationId,
-    recorded_at: recordedAt,
-    status,
-    investigation: {
-      target: investigation.target,
-      required_evidence: investigation.requiredFiles,
-      inspected_evidence: [...investigation.inspectedFiles],
-      gaps,
-    },
-    evidence: buildEvidenceBlock(evidence, knowledge, decisions, traceability, judgment),
-    judgment: judgment.map((item) => ({
-      ...item,
-      evidence_refs: Array.isArray(item.evidence_refs) ? item.evidence_refs : [],
-    })),
-    restrictions,
-  };
-}
+    return {
+      schema: "eos-judgment/v1",
+      judgment_id: judgmentId,
+      investigation_id: investigationId,
+      recorded_at: recordedAt,
+      status,
+      investigation: {
+        target: investigation.target,
+        required_evidence: investigation.requiredFiles,
+        inspected_evidence: [...investigation.inspectedFiles],
+        gaps,
+      },
+      evidence: buildEvidenceBlock(
+        evidence,
+        investigation.inspections,
+        knowledge,
+        decisions,
+        traceability,
+        judgment
+      ),
+      judgment: judgment.map((item) => ({
+        ...item,
+        evidence_refs: Array.isArray(item.evidence_refs) ? item.evidence_refs : [],
+      })),
+      restrictions,
+    };
+  }
 
 function writeSurface(workspaceRoot, surface) {
   const eosDir = path.join(workspaceRoot, ".eos");
