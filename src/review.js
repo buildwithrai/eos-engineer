@@ -282,6 +282,7 @@ export function runReview(workspaceRoot, judgmentId = null) {
 
   const claims = [];
   const findings = [];
+  const verdictFindings = [];
   const evidenceMap = new Map();
 
   for (const claim of target.node.judgment ?? []) {
@@ -291,6 +292,7 @@ export function runReview(workspaceRoot, judgmentId = null) {
         type: claim.type,
         confidence: claim.confidence,
         outcome: "neutral",
+        verdict: "supported",
         evidence_refs: Array.isArray(claim.evidence_refs) ? claim.evidence_refs : [],
         resolved: [],
       });
@@ -315,11 +317,17 @@ export function runReview(workspaceRoot, judgmentId = null) {
 
     const outcome = worstOf(resolved.map((entry) => entry.outcome));
 
+    const verdict =
+      claim.type === "declared" && outcome !== "forward"
+        ? "unsupported"
+        : "supported";
+
     const claimRecord = {
       claim: claim.claim,
       type: claim.type,
       confidence: claim.confidence,
       outcome,
+      verdict,
       evidence_refs: refs,
       resolved,
     };
@@ -328,6 +336,17 @@ export function runReview(workspaceRoot, judgmentId = null) {
 
     if (outcome !== "forward") {
       findings.push({
+        claim: claim.claim,
+        type: claim.type,
+        confidence: claim.confidence,
+        outcome,
+        evidence_refs: refs,
+      });
+    }
+
+    if (verdict === "unsupported") {
+      verdictFindings.push({
+        rule: "JudgmentVerdictRule",
         claim: claim.claim,
         type: claim.type,
         confidence: claim.confidence,
@@ -348,6 +367,7 @@ export function runReview(workspaceRoot, judgmentId = null) {
     outcome,
     claims,
     findings,
+    verdict_findings: verdictFindings,
     evidence: [...evidenceMap.values()],
   };
 
