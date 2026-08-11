@@ -70,10 +70,11 @@ Restated, not redesigned. These survive unchanged.
   Capabilities → Standards → Framework → Projects → Products → Organizations.
   Knowledge flows downward; evidence flows upward; implementation is always
   downstream of knowledge. [observed]
-- The Engineering Ecosystem consists of four constitutional participants:
-  IGE, Omnia, OCS, Corpus. Participant responsibilities become constitutional.
-  Future participants must preserve structural distinctness.
-  [observed, Discovery-59.1]
+- The Engineering Ecosystem has three canonical participants:
+  IGE, Omnia, and OCS. Participant responsibilities become constitutional.
+  Corpus is not a participant; it is accumulated ecosystem state.
+  Future participants, including EOS, must preserve structural distinctness.
+  [observed, Discovery-59.1; current IGE canonical model]
 - Capability ownership is unique; consumption is unlimited; an unowned
   canonical capability is an orphan and both duplication and orphan violate
   ecosystem integrity. [observed, ADR-ECOSYSTEM-0001]
@@ -148,11 +149,11 @@ their boundaries as separate products are not preserved. [user directive]
 | `TraceabilityLink`, `TraceabilityStore`, `DecisionLinker` | @ewa/engineering/traceability | EOS traceability ownership |
 | `EngineeringReviewService` + rules (OrphanRequirement, EvidenceOutcome) | @ewa/engineering/review | EOS review pipeline (loop-closure is EOS's to solve) |
 | `EngineeringChangeRequest` | @ewa/agent/change | EOS proposal/change scaffolding |
-| Repository knowledge, indexers, queries | @ewa/workspace | EOS knowledge substrate (reconciliation with OCS RKM unresolved — see 11.1) |
+| Repository knowledge, indexers, queries | @ewa/workspace | EOS-derived knowledge context (sourced from canonical OCS RKM) |
 | Graph (file/symbol/package nodes, traversal context) | @ewa/graph | EOS graph reasoning primitive |
 | Retrieval (budgeted ranked context) | @ewa/agent/retrieval | EOS retrieval primitive |
 | Agent, capability registry, `CapabilityPolicy`, verifier | @ewa/agent | EOS agency/orchestration skeleton |
-| Providers (Ollama, Fallback) | @ewa/providers | EOS model access (IGE Provider Resolution consumption unresolved — see 11.2) |
+| Providers (Ollama, Fallback) | @ewa/providers | EOS model access (consumes Runtime Provider resolved by IGE) |
 | 13-tool `engineering` capability shape; MCP server; CLI | @ewa/apps | EOS tool/interface surfaces |
 
 ### 4.2 Absorbed from RAI [absorbed]
@@ -185,7 +186,7 @@ internal capabilities. Precedent: IGE alone owns four canonical capabilities.
 | Evidence model + reconcile | [absorbed] EWA | Phase 2 verdict standing |
 | Decisions + traceability maintenance | [absorbed] EWA | Phase 2 verdict standing |
 | Review/rule pipeline | [absorbed] EWA | Standing; loop-closure new |
-| Knowledge + graph + retrieval | [absorbed] EWA | RKM reconciliation — 11.1 |
+| Knowledge + graph + retrieval | [absorbed] EWA | OCS RKM consumed as canonical knowledge substrate |
 | Proposal generation | Candidate-state projection | RUN — F-Expanded-2 not falsified (Experiment-10) |
 | Requirements reasoning (discover/refine/challenge) | Candidate-state refinement | RUN — F-Expanded-3 not falsified (Experiment-11) |
 | Planning intelligence (triage/prioritize/sequence/estimate) | Candidate content feeding deterministic reconcilers | Section 10 |
@@ -205,11 +206,11 @@ EOS consumes these; EOS never owns them. [constitutional]
 | Governance | IGE | Consumes (never amends) |
 | Runtime | IGE | Consumes |
 | Corpus | IGE | Consumes |
-| Provider Resolution | IGE | Consumes (mechanism unresolved — 11.2) |
+| Provider Resolution | IGE | Consumes Runtime Provider resolved by IGE |
 | Business | Omnia | Consumes as projection input; never produces |
 | Observation | OCS | Consumes canonical model; never owns the observed |
 | Canonical observation model (`inspect.json`) | OCS | Consumes |
-| Repository Knowledge Model | OCS | Consumes (reconciliation with absorbed EWA knowledge unresolved — 11.1) |
+| Repository Knowledge Model | OCS | Consumes canonical OCS RKM |
 | Canonical Engineering Schema | OCS | Conforms to |
 | Engineering pipeline | OCS | Consumes outputs |
 | Canonical project artifacts (PROJECT_STATE / BACKLOG / TIMELINE / METRICS) | Deterministic reconcilers | Consumes; never writes |
@@ -396,13 +397,40 @@ is redesigned.
 Marked [unknown]. No implementation detail may be inferred until each is
 reconciled.
 
-1. How absorbed EWA knowledge/graph/retrieval reconciles with OCS Repository
-   Knowledge Model (ADR-0002) — both exist today; two knowledge sources of
-   truth must not persist. [unknown]
-2. How EOS consumes IGE Provider Resolution for model access (EWA's
-   `ProviderRegistry` predates it). [unknown]
+1. **RESOLVED — EOS knowledge/graph/retrieval vs OCS Repository Knowledge Model.**
+   OCS owns the canonical Repository Knowledge Model (RKM). The RKM is the
+   deterministic representation of repository knowledge, consisting of
+   entities, relationships, metadata, and version information. The current
+   canonical artifact is `.ai/knowledge/graph.json`.
+
+   EOS consumes the OCS RKM and may derive bounded reasoning or retrieval
+   context from it. EOS does not generate, maintain, or establish a competing
+   canonical repository knowledge representation.
+
+   The existing `.ewa/knowledge.json` representation is legacy EWA substrate
+   and is not authoritative. Any EOS-local knowledge, graph, index, or
+   retrieval structures are derived/disposable representations sourced from
+   canonical OCS knowledge.
+
+
+2. **RESOLVED — EOS consumption of IGE Provider Resolution.**
+   EOS consumes the Runtime Provider resolved by IGE during bootstrap. EOS
+   does not implement Provider Resolution or own provider selection. The
+   authoritative resolution order is explicit provider declaration,
+   environment override, workspace discovery, then failure. The resolved
+   provider must expose `runtime/`, `templates/`, and `contracts/`; validation
+   failure prevents runtime execution. EWA's historical `ProviderRegistry` is
+   non-authoritative provider-access scaffolding.
 3. Where canonical requirement artifacts live, and who owns the requirement
-   artifact type canonically. [unknown]
+   artifact type canonically. [unknown — EOS ownership is falsified, but the
+   canonical participant owner and canonical storage location are not yet
+   established by current evidence. EWA exposes a requirement artifact type
+   and `.ewa/engineering/requirements/` storage, but its implementation is
+   treated as a consumer/projection surface rather than proof of canonical
+   ownership. OCS establishes canonical engineering representation generally,
+   while current OCS evidence does not establish canonical requirement
+   ownership. IGE establishes unique participant responsibility/ownership
+   principles, but does not identify the requirement artifact owner.]
 4. The mechanism by which EOS planning intelligence feeds deterministic
    reconcilers. RESOLVED by F-Plan (Experiment-08): through
    participant-declared decisions; EOS judgment is never reconciler input.
