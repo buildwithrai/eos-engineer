@@ -267,6 +267,19 @@ async function runEos(userInput, { workspace, chatFn = chat, maxIterations = 10 
     if (parsed.type === "judgment") {
       const items = Array.isArray(parsed.judgment) ? parsed.judgment : [];
 
+        if (items.length === 0) {
+          messages.push({
+            role: "assistant",
+            content: JSON.stringify(parsed),
+          });
+          messages.push({
+            role: "user",
+            content:
+              "You cannot finish yet. A judgment must contain at least one claim.",
+          });
+          continue;
+        }
+
       const gate = gateJudgment(items, investigation, evidence);
 
       if (!gate.ok) {
@@ -280,6 +293,29 @@ async function runEos(userInput, { workspace, chatFn = chat, maxIterations = 10 
             gate.reason === "state"
               ? `You cannot finish yet. ${gate.message}`
               : `You cannot finish yet. ${gate.message}. Inspect the required evidence before judging.`,
+        });
+        continue;
+      }
+
+      const hasUninspectedRequiredEvidence =
+        investigation.requiredFiles.some(
+          (file) => !investigation.inspectedFiles.has(file)
+        );
+
+      if (
+        items.some(
+          (item) => item.type === "candidate" || item.type === "declared"
+        ) &&
+        hasUninspectedRequiredEvidence
+      ) {
+        messages.push({
+          role: "assistant",
+          content: JSON.stringify(parsed),
+        });
+        messages.push({
+          role: "user",
+          content:
+            "You cannot finish with a candidate or declared judgment while required evidence remains uninspected. Inspect the remaining required evidence before judging.",
         });
         continue;
       }
