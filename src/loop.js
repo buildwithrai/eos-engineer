@@ -21,6 +21,7 @@ import {
   isKnowledgeRef,
   isKnowledgeEntityRef,
 } from "./knowledge.js";
+import { loadReviews, isReviewRef, isPersistedReviewRef } from "./review.js";
 
 const tools = { read_file: readFile };
 
@@ -65,12 +66,16 @@ When investigating, gather the evidence required before returning a judgment.
       does not match a listed entity is rejected.
       If REPOSITORY KNOWLEDGE directly supports a claim, cite "REPOSITORY KNOWLEDGE"
       or the specific knowledge entity ref in evidence_refs.
+      Review records are explicit evidence artifacts produced from a committed
+      judgment. When re-verifying a prior judgment, cite the review record as
+      review:<id> or its artifact path (.eos/reviews/<id>.json) in evidence_refs.
 
 Never claim to have inspected a file unless the read_file tool returned it.
 
 A declared or candidate claim MUST reference only:
 - files you actually inspected, or
 - evidence ids listed in the ENGINEERING EVIDENCE block below, or
+- review refs listed in the REVIEW EVIDENCE block below, or
 - knowledge refs listed in the REPOSITORY KNOWLEDGE block below.
 
 For an inspected file, evidence_refs MUST use the file path returned by
@@ -126,7 +131,7 @@ function hasRequiredEvidence(investigation) {
   );
 }
 
-function buildSubstrateContext(evidence, knowledge, decisions, traceability) {
+function buildSubstrateContext(evidence, knowledge, decisions, traceability, reviews) {
   const parts = [];
 
   if (knowledge !== undefined) {
@@ -140,6 +145,16 @@ function buildSubstrateContext(evidence, knowledge, decisions, traceability) {
   if (evidence.length > 0) {
     const ids = evidence.map((item) => item.evidence.id).join(", ");
     parts.push(`ENGINEERING EVIDENCE\nEvidence ids available for citation: ${ids}`);
+  }
+
+  if (reviews.length > 0) {
+    const lines = reviews.map(
+      ({ review }) =>
+        `- review:${review.review_id} [${review.outcome}] (reviewed ${review.reviewed_judgment_id})`
+    );
+    parts.push(`REVIEW EVIDENCE\nReview refs available for citation:\n${lines.join("\n")}`);
+  } else {
+    parts.push("REVIEW EVIDENCE\n(none — no review evidence recorded)");
   }
 
   if (decisions.length > 0) {
@@ -269,7 +284,8 @@ function isPersistedJudgmentRef(ref, workspaceRoot) {
     judgment,
     workspaceRoot,
     evidence = [],
-    knowledge = undefined
+    knowledge = undefined,
+    reviews = []
   ) {
     const absoluteRoot = normalizePath(workspaceRoot);
 
@@ -282,6 +298,12 @@ function isPersistedJudgmentRef(ref, workspaceRoot) {
           : []
       ).map((ref) => {
         if (typeof ref !== "string") return ref;
+
+        // Review references are canonical as-is. Never normalize them as
+        // filesystem paths.
+        if (isReviewRef(ref, reviews)) {
+          return ref;
+        }
 
         // Knowledge references are canonical as-is (blanket or specific
         // entity refs). Never normalize them as filesystem paths.
@@ -318,7 +340,8 @@ function isPersistedJudgmentRef(ref, workspaceRoot) {
   investigation,
   evidence = [],
   knowledge = undefined,
-  workspaceRoot = undefined
+  workspaceRoot = undefined,
+  reviews = []
 ) {
   const inspected = [...investigation.inspectedFiles];
 
@@ -386,17 +409,25 @@ function isPersistedJudgmentRef(ref, workspaceRoot) {
 
       const backedByKnowledge = isKnowledgeRef(ref, knowledge);
 
+      const backedByReview = isReviewRef(ref, reviews);
+
       const persistedJudgmentRef =
         workspaceRoot !== undefined &&
         isPersistedJudgmentRef(ref, workspaceRoot);
 
+      const persistedReviewRef =
+        workspaceRoot !== undefined &&
+        isPersistedReviewRef(ref, workspaceRoot);
+
       return (
         persistedJudgmentRef ||
+        persistedReviewRef ||
         !(
           directlyInspected ||
           requiredEvidenceInspected ||
           backedByEvidenceStore ||
-          backedByKnowledge
+          backedByKnowledge ||
+          backedByReview
         )
       );
     });
@@ -439,8 +470,9 @@ async function runEos(userInput, { workspace, chatFn = chat, maxIterations = 10 
   const knowledge = loadKnowledge(workspaceRoot);
   const decisions = loadDecisions(workspaceRoot);
   const traceability = loadTraceability(workspaceRoot);
+  const reviews = loadReviews(workspaceRoot);
 
-  const substrateContext = buildSubstrateContext(evidence, knowledge, decisions, traceability);
+  const substrateContext = buildSubstrateContext(evidence, knowledge, decisions, traceability, reviews);
 
   const messages = [
     {
@@ -489,14 +521,15 @@ async function runEos(userInput, { workspace, chatFn = chat, maxIterations = 10 
         }
 
       const canonicalItems =
-        canonicalizeEvidenceRefs(items, workspaceRoot, evidence, knowledge);
+        canonicalizeEvidenceRefs(items, workspaceRoot, evidence, knowledge, reviews);
 
       const gate = gateJudgment(
         canonicalItems,
         investigation,
         evidence,
         knowledge,
-        workspaceRoot
+        workspaceRoot,
+        reviews
       );
 
       if (!gate.ok) {
@@ -621,6 +654,7 @@ async function runEos(userInput, { workspace, chatFn = chat, maxIterations = 10 
     knowledge,
     decisions,
     traceability,
+    reviews,
     previousJudgmentId,
     previousJudgmentDigest,
     commitReason
@@ -637,6 +671,7 @@ function buildEvidenceBlock(
   knowledge,
   decisions,
   traceability,
+  reviews,
   judgment
 ) {
   const consumed = new Set();
@@ -694,11 +729,18 @@ function buildEvidenceBlock(
               relationship: link.relationship,
             })),
           },
+    reviews: reviews.map(({ review, source, digest }) => ({
+      id: review.review_id,
+      outcome: review.outcome,
+      judgment_id: review.reviewed_judgment_id,
+      source,
+      digest,
+    })),
     consumed: [...consumed],
   };
 }
 
-  function buildSurface(userInput, investigation, judgment, restrictions, evidence, knowledge, decisions, traceability, previousJudgmentId = null, previousJudgmentDigest = null, commitReason = "judgment") {
+  function buildSurface(userInput, investigation, judgment, restrictions, evidence, knowledge, decisions, traceability, reviews, previousJudgmentId = null, previousJudgmentDigest = null, commitReason = "judgment") {
     const gaps = investigation.requiredFiles.filter(
       (file) => !investigation.inspectedFiles.has(file)
     );
@@ -730,6 +772,7 @@ function buildEvidenceBlock(
         knowledge,
         decisions,
         traceability,
+        reviews,
         judgment
       ),
       judgment: judgment.map((item) => ({
