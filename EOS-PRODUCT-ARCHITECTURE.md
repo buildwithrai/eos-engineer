@@ -407,30 +407,34 @@ reconciled.
    context from it. EOS does not generate, maintain, or establish a competing
    canonical repository knowledge representation.
 
-   The existing `.ewa/knowledge.json` representation is legacy EWA substrate
-   and is not authoritative. Any EOS-local knowledge, graph, index, or
-   retrieval structures are derived/disposable representations sourced from
-   canonical OCS knowledge.
+   The existing `.ewa/knowledge.json` representation is legacy implementation
+   substrate and is not authoritative. It is retained only as historical or
+   migration material; EOS does not consume EWA as a separate runtime system.
+   Any EOS-local knowledge, graph, index, or retrieval structures are
+   derived/disposable representations sourced from canonical OCS knowledge.
 
 
-2. **RESOLVED — EOS consumption of IGE Provider Resolution.**
-   EOS consumes the Runtime Provider resolved by IGE during bootstrap. EOS
-   does not implement Provider Resolution or own provider selection. The
-   authoritative resolution order is explicit provider declaration,
-   environment override, workspace discovery, then failure. The resolved
-   provider must expose `runtime/`, `templates/`, and `contracts/`; validation
-   failure prevents runtime execution. EWA's historical `ProviderRegistry` is
-   non-authoritative provider-access scaffolding.
+2. **RESOLVED — EOS use of IGE Provider Resolution.**
+   IGE owns Provider Resolution. EOS uses the Runtime Provider resolved by IGE
+   during bootstrap; EOS does not implement Provider Resolution or own provider
+   selection. The authoritative resolution order is explicit provider
+   declaration, environment override, workspace discovery, then failure. The
+   resolved provider must expose `runtime/`, `templates/`, and `contracts/`;
+   validation failure prevents runtime execution. EWA's historical
+   `ProviderRegistry` is implementation lineage only and is not an EOS
+   architectural dependency.
 3. Where canonical requirement artifacts live, and who owns the requirement
    artifact type canonically. [unknown — EOS ownership is falsified, but the
    canonical participant owner and canonical storage location are not yet
-   established by current evidence. EWA exposes a requirement artifact type
-   and `.ewa/engineering/requirements/` storage, but its implementation is
-   treated as a consumer/projection surface rather than proof of canonical
-   ownership. OCS establishes canonical engineering representation generally,
-   while current OCS evidence does not establish canonical requirement
-   ownership. IGE establishes unique participant responsibility/ownership
-   principles, but does not identify the requirement artifact owner.]
+   established by current evidence. Historical EWA lineage exposes a requirement
+   artifact type and `.ewa/engineering/requirements/` storage, but those artifacts
+   are historical implementation lineage and do not establish canonical ownership
+   or an EWA participant boundary. OCS establishes canonical engineering
+   representation generally, while current OCS evidence does not establish
+   canonical requirement ownership. IGE establishes unique participant
+   responsibility/ownership principles, but does not identify the requirement
+   artifact owner.]
+
 4. The mechanism by which EOS planning intelligence feeds deterministic
    reconcilers. RESOLVED by F-Plan (Experiment-08): through
    participant-declared decisions; EOS judgment is never reconciler input.
@@ -442,12 +446,15 @@ reconciled.
    that does not yet exist as a capability. [unknown]
 6. Whether Discovery-63 (projection is the universal capability) confirms —
    currently Candidate. [observed → unknown]
-7. Whether the live substrate becomes populated: EWA `.ewa/engineering/`
-   holds only an empty `decisions/`; OCS `inspect.json` engineering counts are
-   zero. EOS judgment is not yet exercisable against real, populated evidence.
-   [observed → unknown]
-8. Whether any future agent legitimately projects independently, and so
-   requires participant status rather than role status (F9). [unknown]
+7. Whether the live engineering substrate becomes populated: the legacy
+   `.ewa/engineering/` substrate currently holds only an empty `decisions/`;
+   OCS `inspect.json` engineering counts are zero. EOS judgment is not yet
+   exercisable against real, populated evidence. [observed → unknown]
+8. Whether any future independent agent constitutes a distinct participant
+   rather than an internal EOS role (F9). [unknown]
+
+   Historical EWA/RAI lineage does not establish such a participant boundary;
+   this question applies only to genuinely independent future agents.
 
 ---
 
@@ -474,6 +481,9 @@ reconciled.
 - EOS's projections are never reconciler inputs and never Runtime State.
   [observed]
 - OpenCode is not a participant; EOS is not shaped around it. [user directive]
+- EWA and RAI Agent are historical EOS lineage, not current peer participants.
+- Existing `.ewa/*` artifacts do not establish an EWA participant, ownership
+  boundary, runtime dependency, or separate system.
 - Omnia Workspace is an instance/application, not a peer product. [user
   directive / Discovery-53]
 
@@ -489,12 +499,31 @@ and the EOS/OCS boundary hold; deterministic-before-probabilistic and
 evidence-gated judgment hold; decision IDs are context, not evidence; EOS does
 not write or reclassify deterministic observation truth.
 
-### CONFIRMED AS DIRECTION (proposed, to be falsified)
+### CONFIRMED AS DIRECTION
 
-EOS is the Engineering Operating Intelligence product; EWA/RAI are absorbed
-lineage; EOS owns the expanded Intelligence surface; agency is internal; the
-old "judgment projection layer over EWA" framing is transitional, not
-architectural.
+EOS is the Engineering Operating Intelligence product.
+
+EWA and RAI Agent are historical implementation lineage of EOS, not current
+peer participants or architectural layers beneath EOS.
+
+The implementation lineage is:
+
+EWA → RAI Agent → EOS
+
+IGE is the constitutional engineering framework within which this lineage
+evolved; it is not an implementation predecessor of EOS.
+
+EWA was an earlier workspace/implementation form. RAI Agent was the subsequent
+agent form. EOS is the resulting Engineering Operating Intelligence product
+and participant.
+
+Existing `.ewa/` artifacts may remain as legacy or migration substrate, but
+their physical presence does not establish an EWA participant, ownership
+boundary, runtime dependency, or separate system.
+
+EOS owns the expanded Intelligence surface and its agency is internal.
+The former "judgment projection layer over EWA" framing is transitional and
+is not the EOS architecture.
 
 ### FALSIFICATION PENDING
 
@@ -537,5 +566,6 @@ survival loss (see FALSIFICATION RUN).
 
 ### UNKNOWN
 
-The seven unresolved questions in Section 11. No implementation proceeds on
-any of them until reconciled.
+Section 11 contains remaining architectural questions plus explicitly
+identified implementation/evidence maturity questions. Architectural
+implementation must not assume an unresolved ownership or boundary decision.
