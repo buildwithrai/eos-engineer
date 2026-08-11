@@ -57,6 +57,13 @@ async function testGateBlockThenJudge() {
   assert("final judgment recorded", surface.judgment.length === 1);
   assert("judgment references inspected evidence", surface.judgment[0].evidence_refs[0] === "src/index.js");
   assert("schema correct", surface.schema === "eos-judgment/v1");
+assert("judgment id present", /^[0-9a-f-]{36}$/.test(surface.judgment_id));
+assert("investigation id present", /^[0-9a-f-]{36}$/.test(surface.investigation_id));
+assert("judgment and investigation ids differ", surface.judgment_id !== surface.investigation_id);
+assert("surface timestamp present", typeof surface.recorded_at === "string" && !Number.isNaN(Date.parse(surface.recorded_at)));
+assert("claim has no independent timestamp", surface.judgment[0].recorded_at === undefined);
+assert("declared status present", surface.status === "declared");
+
   assert("no .ige write", !fs.readdirSync(path.join(workspace, ".ige")).includes("judgment.json"));
 }
 

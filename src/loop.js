@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import crypto from "node:crypto";
 import { chat } from "./ollama.js";
 import { readFile } from "./tools/readFile.js";
 import {
@@ -371,8 +372,23 @@ function buildSurface(userInput, investigation, judgment, restrictions, evidence
     (file) => !investigation.inspectedFiles.has(file)
   );
 
+  const recordedAt = new Date().toISOString();
+  const investigationId = crypto.randomUUID();
+  const judgmentId = crypto.randomUUID();
+
+  const status =
+    judgment.some((item) => item.type === "blocked")
+      ? "blocked"
+      : judgment.some((item) => item.type === "candidate")
+        ? "candidate"
+        : "declared";
+
   return {
     schema: "eos-judgment/v1",
+    judgment_id: judgmentId,
+    investigation_id: investigationId,
+    recorded_at: recordedAt,
+    status,
     investigation: {
       target: investigation.target,
       required_evidence: investigation.requiredFiles,
@@ -383,7 +399,6 @@ function buildSurface(userInput, investigation, judgment, restrictions, evidence
     judgment: judgment.map((item) => ({
       ...item,
       evidence_refs: Array.isArray(item.evidence_refs) ? item.evidence_refs : [],
-      recorded_at: new Date().toISOString(),
     })),
     restrictions,
   };
