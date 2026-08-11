@@ -140,17 +140,66 @@ function normalizeJson(raw) {
   return jsonText.replace(/\\\\([^"\\\\\\/bfnrtu])/g, "$1");
 }
 
+const JUDGMENT_STATES = {
+  blocked: { rank: 0, requiresEvidence: false },
+  candidate: { rank: 1, requiresEvidence: true },
+  declared: { rank: 2, requiresEvidence: true },
+};
+
+const LEGAL_TRANSITIONS = {
+  blocked: ["candidate"],
+  candidate: ["declared"],
+};
+
+function isJudgmentState(type) {
+  return Object.prototype.hasOwnProperty.call(JUDGMENT_STATES, type);
+}
+
+function canTransition(from, to) {
+  if (!isJudgmentState(to)) return false;
+  if (from == null) return true;
+  if (from === to) return true;
+  return (LEGAL_TRANSITIONS[from] ?? []).includes(to);
+}
+
+function surfaceStatus(judgment) {
+  let status = "declared";
+
+  for (const item of judgment) {
+    const state = JUDGMENT_STATES[item.type];
+
+    if (!state) continue;
+
+    if (state.rank < JUDGMENT_STATES[status].rank) {
+      status = item.type;
+    }
+  }
+
+  return status;
+}
+
 function gateJudgment(judgment, investigation, evidence = []) {
   const inspected = [...investigation.inspectedFiles];
 
   for (const item of judgment) {
-    if (item.type === "blocked") continue;
+    const state = JUDGMENT_STATES[item.type];
+
+    if (!state) {
+      return {
+        ok: false,
+        reason: "state",
+        message: `Judgment state "${item.type}" is not a legal EOS state. Use blocked, candidate, or declared.`,
+      };
+    }
+
+    if (!state.requiresEvidence) continue;
 
     const refs = Array.isArray(item.evidence_refs) ? item.evidence_refs : [];
 
     if (refs.length === 0) {
       return {
         ok: false,
+        reason: "evidence",
         missing: [],
         message: `Claim "${item.claim}" references no evidence. Provide evidence_refs.`,
       };
@@ -168,6 +217,7 @@ function gateJudgment(judgment, investigation, evidence = []) {
     if (missing.length > 0) {
       return {
         ok: false,
+        reason: "evidence",
         missing,
         message: `Claim "${item.claim}" references evidence not inspected or not in the engineering evidence store: ${missing.join(", ")}`,
       };
@@ -226,7 +276,10 @@ async function runEos(userInput, { workspace, chatFn = chat, maxIterations = 10 
         });
         messages.push({
           role: "user",
-          content: `You cannot finish yet. ${gate.message}. Inspect the required evidence before judging.`,
+          content:
+            gate.reason === "state"
+              ? `You cannot finish yet. ${gate.message}`
+              : `You cannot finish yet. ${gate.message}. Inspect the required evidence before judging.`,
         });
         continue;
       }
@@ -376,12 +429,7 @@ function buildSurface(userInput, investigation, judgment, restrictions, evidence
   const investigationId = crypto.randomUUID();
   const judgmentId = crypto.randomUUID();
 
-  const status =
-    judgment.some((item) => item.type === "blocked")
-      ? "blocked"
-      : judgment.some((item) => item.type === "candidate")
-        ? "candidate"
-        : "declared";
+  const status = surfaceStatus(judgment);
 
   return {
     schema: "eos-judgment/v1",
@@ -418,4 +466,10 @@ function writeSurface(workspaceRoot, surface) {
   fs.renameSync(tmpPath, finalPath);
 }
 
-export { runEos };
+export {
+  runEos,
+  JUDGMENT_STATES,
+  isJudgmentState,
+  canTransition,
+  surfaceStatus,
+};
