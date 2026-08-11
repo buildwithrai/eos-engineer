@@ -207,7 +207,7 @@ function resolveReviewedNode(root, judgmentId) {
   return { node: latest.surface, bytes, file, digest: sha256(bytes) };
 }
 
-function resolveRefOutcome(ref, context) {
+export function resolveRefOutcome(ref, context) {
   const evidenceRecord = findEvidence(context.evidenceItems, ref);
 
   if (evidenceRecord !== undefined) {

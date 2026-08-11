@@ -21,7 +21,13 @@ import {
   isKnowledgeRef,
   isKnowledgeEntityRef,
 } from "./knowledge.js";
-import { loadReviews, isReviewRef, isPersistedReviewRef } from "./review.js";
+import {
+  loadReviews,
+  isReviewRef,
+  isPersistedReviewRef,
+  resolveRefOutcome,
+  reviewIdFromRef,
+} from "./review.js";
 
 const tools = { read_file: readFile };
 
@@ -210,15 +216,53 @@ const LEGAL_TRANSITIONS = {
   candidate: ["declared"],
 };
 
+const LEGAL_DOWNGRADES = {
+  declared: ["candidate"],
+  candidate: ["blocked"],
+};
+
 function isJudgmentState(type) {
   return Object.prototype.hasOwnProperty.call(JUDGMENT_STATES, type);
 }
 
-function canTransition(from, to) {
+function canTransition(from, to, regressionAuthorized = false) {
   if (!isJudgmentState(to)) return false;
   if (from == null) return true;
   if (from === to) return true;
-  return (LEGAL_TRANSITIONS[from] ?? []).includes(to);
+  if ((LEGAL_TRANSITIONS[from] ?? []).includes(to)) return true;
+  if (regressionAuthorized) {
+    return (LEGAL_DOWNGRADES[from] ?? []).includes(to);
+  }
+  return false;
+}
+
+function regressionAuthorizedFor(judgment, context, priorJudgmentId) {
+  for (const item of judgment) {
+    const refs = Array.isArray(item.evidence_refs) ? item.evidence_refs : [];
+
+    for (const ref of refs) {
+      const resolved = resolveRefOutcome(ref, context);
+
+      if (resolved.outcome !== "regression") continue;
+
+      const reviewId = reviewIdFromRef(ref);
+
+      if (reviewId === null) return true;
+
+      const record = context.reviews.find(
+        (entry) => entry.review.review_id === reviewId
+      );
+
+      if (
+        record !== undefined &&
+        record.review.reviewed_judgment_id === priorJudgmentId
+      ) {
+        return true;
+      }
+    }
+  }
+
+  return false;
 }
 
 function surfaceStatus(judgment) {
@@ -464,6 +508,18 @@ async function runEos(userInput, { workspace, chatFn = chat, maxIterations = 10 
     previousStatus = null;
   }
 
+  let priorJudgmentId = null;
+  let previousJudgmentDigest = null;
+
+  if (lineage.state !== "inconsistent") {
+    const latest = loadLatestProjection(workspaceRoot);
+
+    if (latest !== null) {
+      priorJudgmentId = latest.surface.judgment_id;
+      previousJudgmentDigest = latest.digest;
+    }
+  }
+
   const investigation = createInvestigation(userInput);
 
   const evidence = loadEvidence(workspaceRoot);
@@ -471,6 +527,14 @@ async function runEos(userInput, { workspace, chatFn = chat, maxIterations = 10 
   const decisions = loadDecisions(workspaceRoot);
   const traceability = loadTraceability(workspaceRoot);
   const reviews = loadReviews(workspaceRoot);
+
+  const reviewContext = {
+    workspaceRoot,
+    evidenceItems: evidence,
+    knowledge,
+    reviews,
+    inspections: investigation.inspections,
+  };
 
   const substrateContext = buildSubstrateContext(evidence, knowledge, decisions, traceability, reviews);
 
@@ -553,7 +617,13 @@ async function runEos(userInput, { workspace, chatFn = chat, maxIterations = 10 
 
       const nextStatus = surfaceStatus(canonicalItems);
 
-      if (!canTransition(previousStatus, nextStatus)) {
+      const regressionAuthorized = regressionAuthorizedFor(
+        canonicalItems,
+        reviewContext,
+        priorJudgmentId
+      );
+
+      if (!canTransition(previousStatus, nextStatus, regressionAuthorized)) {
         messages.push({
           role: "assistant",
           content: JSON.stringify(parsed),
@@ -561,10 +631,17 @@ async function runEos(userInput, { workspace, chatFn = chat, maxIterations = 10 
 
         messages.push({
           role: "user",
-          content: `You cannot finish yet. Judging as "${nextStatus}" is not a legal transition from the previous state "${previousStatus}". Legal transitions are blocked -> candidate -> declared.`,
+          content: `You cannot finish yet. Judging as "${nextStatus}" is not a legal transition from the previous state "${previousStatus}". Legal transitions are blocked -> candidate -> declared, plus one-level downgrades (declared -> candidate, candidate -> blocked) when a cited reference resolves to a regression outcome.`,
         });
 
         continue;
+      }
+
+      if (
+        previousStatus !== null &&
+        JUDGMENT_STATES[nextStatus].rank < JUDGMENT_STATES[previousStatus].rank
+      ) {
+        commitReason = "revision";
       }
 
       previousStatus = nextStatus;
@@ -633,18 +710,6 @@ async function runEos(userInput, { workspace, chatFn = chat, maxIterations = 10 
     ];
   }
 
-  let previousJudgmentId = null;
-  let previousJudgmentDigest = null;
-
-  if (lineage.state !== "inconsistent") {
-    const latest = loadLatestProjection(workspaceRoot);
-
-    if (latest !== null) {
-      previousJudgmentId = latest.surface.judgment_id;
-      previousJudgmentDigest = latest.digest;
-    }
-  }
-
   const surface = buildSurface(
     userInput,
     investigation,
@@ -655,7 +720,7 @@ async function runEos(userInput, { workspace, chatFn = chat, maxIterations = 10 
     decisions,
     traceability,
     reviews,
-    previousJudgmentId,
+    priorJudgmentId,
     previousJudgmentDigest,
     commitReason
   );

@@ -5,7 +5,7 @@
   "main": "index.js",
   "type": "module",
   "scripts": {
-    "test": "node test/judgment.test.js && node test/evidence.test.js && node test/judgment-phase2c-adversarial.test.js && node test/judgment-phase2c-state-machine.test.js && node test/judgment-phase2c-state-machine-adversarial.test.js && node test/judgment-phase2c-transitions.test.js && node test/judgment-phase2d-lineage.test.js && node test/judgment-phase2e-knowledge.test.js && node test/judgment-phase2f-review.test.js"
+    "test": "node test/judgment.test.js && node test/evidence.test.js && node test/judgment-phase2c-adversarial.test.js && node test/judgment-phase2c-state-machine.test.js && node test/judgment-phase2c-state-machine-adversarial.test.js && node test/judgment-phase2c-transitions.test.js && node test/judgment-phase2d-lineage.test.js && node test/judgment-phase2e-knowledge.test.js && node test/judgment-phase2f-review.test.js && node test/judgment-phase2g-correction.test.js"
   },
   "license": "ISC"
 }

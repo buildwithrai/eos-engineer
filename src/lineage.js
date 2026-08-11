@@ -87,7 +87,11 @@ export function validateProjection(surface) {
     return { ok: false, reason: "status" };
   }
 
-  if (surface.commit_reason !== "judgment" && surface.commit_reason !== "fallback") {
+  if (
+    surface.commit_reason !== "judgment" &&
+    surface.commit_reason !== "fallback" &&
+    surface.commit_reason !== "revision"
+  ) {
     return { ok: false, reason: "commit-reason" };
   }
 
