@@ -1,0 +1,11 @@
+{
+  "name": "eos-engineer",
+  "version": "1.0.0",
+  "description": "Engineering Operating Intelligence",
+  "main": "index.js",
+  "type": "module",
+  "scripts": {
+    "test": "node test/judgment.test.js && node test/evidence.test.js"
+  },
+  "license": "ISC"
+}
