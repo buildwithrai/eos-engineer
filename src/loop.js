@@ -780,9 +780,13 @@ async function runEos(userInput, { workspace, chatFn = chat, maxIterations = 10 
             "Plan applied. Continue investigating, or judge when the investigation is complete.",
         });
       } else {
+        const uninspectedExplicit = [...investigation.explicitRequirements].filter(
+          (file) => !investigation.inspectedEvidence.has(file)
+        );
+
         messages.push({
           role: "user",
-          content: `Plan rejected: ${planResult.message}${planGuidance(parsed, investigation)}`,
+          content: `Plan rejected: ${planResult.message}${planGuidance(parsed, investigation)}${requiredReadDirective(investigation, uninspectedExplicit)}`,
         });
       }
 
