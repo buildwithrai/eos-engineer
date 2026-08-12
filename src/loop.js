@@ -854,4 +854,6 @@ export {
   isJudgmentState,
   canTransition,
   surfaceStatus,
+  gateJudgment,
+  canonicalizeEvidenceRefs,
 };
