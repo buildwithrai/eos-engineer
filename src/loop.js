@@ -3,6 +3,14 @@ import path from "node:path";
 import crypto from "node:crypto";
 import { chat } from "./ollama.js";
 import { readFile } from "./tools/readFile.js";
+import { readFiles } from "./tools/readFiles.js";
+import {
+  createInvestigation,
+  recordInspection,
+  applyPlan,
+  planningComplete,
+  investigationComplete,
+} from "./investigation.js";
 import {
   loadEvidence,
   loadKnowledge,
@@ -29,7 +37,7 @@ import {
   reviewIdFromRef,
 } from "./review.js";
 
-const tools = { read_file: readFile };
+const tools = { read_file: readFile, read_files: readFiles };
 
 const SYSTEM_PROMPT = `
 You are EOS, an engineering operating intelligence.
@@ -97,44 +105,18 @@ then the evidence_ref must identify that inspected file, such as:
 
 Never invent an evidence id or evidence label. An evidence_ref that does not
 resolve to inspected evidence or to a listed evidence id will be rejected.
+
+You may also return a plan response to manage the investigation:
+{"type":"plan","adopt":["..."],"waive":[{"path":"...","reason":"..."}]}
+adopt means a discovered dependency becomes part of the investigation scope and must be inspected.
+waive means a discovered dependency is disposed of and does not require inspection; a non-empty reason is required.
+Reading a discovered dependency implicitly adopts it.
+candidate and declared judgments cannot be accepted while discovered relationships remain undisposed (pending). Dispose of them with adopt or waive before judging.
+Never claim to have inspected a file unless read_file or read_files actually returned it.
 `;
 
 function normalizePath(filePath) {
   return filePath.replace(/\\/g, "/").replace(/^\/+/, "");
-}
-
-function createInvestigation(userInput) {
-  const requiredFiles = new Set();
-
-  const filePattern =
-    /(?:^|[\s"'`(])((?:\.\/)?(?:[\w.-]+\/)*[\w.-]+\.(?:js|ts|tsx|jsx|json|md|sql|yaml|yml|py|sh))(?=$|[\s"'`),.:;])/g;
-
-  let match;
-
-  while ((match = filePattern.exec(userInput)) !== null) {
-    const candidate = match[1].trim();
-
-    if (
-      !candidate.endsWith(".") &&
-      !candidate.startsWith("Do ") &&
-      !candidate.startsWith("http")
-    ) {
-      requiredFiles.add(normalizePath(candidate));
-    }
-  }
-
-  return {
-    target: userInput.split("\n")[0].slice(0, 200),
-    requiredFiles: [...requiredFiles],
-    inspectedFiles: new Set(),
-    inspections: [],
-  };
-}
-
-function hasRequiredEvidence(investigation) {
-  return investigation.requiredFiles.every((file) =>
-    investigation.inspectedFiles.has(file)
-  );
 }
 
 function buildSubstrateContext(evidence, knowledge, decisions, traceability, reviews) {
@@ -387,7 +369,7 @@ function isPersistedJudgmentRef(ref, workspaceRoot) {
   workspaceRoot = undefined,
   reviews = []
 ) {
-  const inspected = [...investigation.inspectedFiles];
+  const inspected = [...investigation.inspectedEvidence];
 
   for (const item of judgment) {
     const state = JUDGMENT_STATES[item.type];
@@ -401,21 +383,44 @@ function isPersistedJudgmentRef(ref, workspaceRoot) {
     }
 
     if (!state.requiresEvidence) continue;
-    if (!hasRequiredEvidence(investigation)) {
-      const missingRequired = investigation.requiredFiles.filter(
-        (file) => !investigation.inspectedFiles.has(file)
+
+    const planningOk = planningComplete(investigation);
+    const investigationOk = investigationComplete(investigation);
+
+    if (!planningOk || !investigationOk) {
+      const missingRequired = [...investigation.explicitRequirements].filter(
+        (file) => !investigation.inspectedEvidence.has(file)
       );
+      const missingAdopted = [...investigation.adoptedRequirements].filter(
+        (file) => !investigation.inspectedEvidence.has(file)
+      );
+      const pending = investigation.discoveredDependencies
+        .filter((dependency) => dependency.status === "pending")
+        .map((dependency) => `${dependency.from} -> ${dependency.to}`);
+
+      let message =
+        `Claim "${item.claim}" cannot reach ${item.type} because the investigation is incomplete. `;
+
+      if (missingRequired.length > 0) {
+        message += `Required evidence not inspected: ${missingRequired.join(", ")}. `;
+      }
+
+      if (missingAdopted.length > 0) {
+        message += `Adopted evidence not inspected: ${missingAdopted.join(", ")}. `;
+      }
+
+      if (pending.length > 0) {
+        message += `Discovered relationships not disposed: ${pending.join(", ")}. Waive or adopt them before judging.`;
+      }
 
       return {
         ok: false,
         reason: "evidence",
-        missing: missingRequired,
-        message:
-      `Claim "${item.claim}" cannot reach ${item.type} because required ` +
-      `investigation evidence has not been inspected: ${missingRequired.join(", ")}`,
+        missing: [...missingRequired, ...missingAdopted],
+        pending,
+        message,
       };
     }
-
 
     const refs = Array.isArray(item.evidence_refs) ? item.evidence_refs : [];
 
@@ -438,14 +443,14 @@ function isPersistedJudgmentRef(ref, workspaceRoot) {
       );
 
       const requiredEvidenceInspected =
-        investigation.requiredFiles.some(
+        [...investigation.explicitRequirements].some(
           (requiredFile) =>
             (
               requiredFile === normalizedRef ||
               requiredFile.endsWith(`/${normalizedRef}`) ||
               normalizedRef.endsWith(`/${requiredFile}`)
             ) &&
-            investigation.inspectedFiles.has(requiredFile)
+            investigation.inspectedEvidence.has(requiredFile)
         );
 
       const backedByEvidenceStore =
@@ -656,30 +661,27 @@ async function runEos(userInput, { workspace, chatFn = chat, maxIterations = 10 
       if (!tool) {
         messages.push({
           role: "user",
-          content: `Unknown tool "${parsed.tool}". Use read_file.`,
+          content: `Unknown tool "${parsed.tool}". Use read_file or read_files.`,
         });
         continue;
       }
 
       const result = await tool(parsed.input ?? {}, workspaceRoot);
 
-      if (
-        parsed.tool === "read_file" &&
-        result?.ok &&
-        result?.path
-      ) {
-        const normalized = normalizePath(result.path);
-
-        for (const requiredFile of investigation.requiredFiles) {
-          if (
-            normalized === requiredFile ||
-            normalized.endsWith(`/${requiredFile}`)
-          ) {
-            investigation.inspectedFiles.add(requiredFile);
+      if (parsed.tool === "read_file") {
+        if (result?.ok && result?.path) {
+          recordInspection(investigation, result, workspaceRoot);
+          investigation.inspections.push(result);
+        }
+      } else if (parsed.tool === "read_files") {
+        if (Array.isArray(result?.inspections)) {
+          for (const inspection of result.inspections) {
+            if (inspection.ok && inspection.path) {
+              recordInspection(investigation, inspection, workspaceRoot);
+              investigation.inspections.push(inspection);
+            }
           }
         }
-
-        investigation.inspections.push(result);
       }
 
       messages.push({ role: "assistant", content: JSON.stringify(parsed) });
@@ -687,9 +689,33 @@ async function runEos(userInput, { workspace, chatFn = chat, maxIterations = 10 
       continue;
     }
 
+    if (parsed.type === "plan") {
+      const planResult = applyPlan(investigation, {
+        adopt: parsed.adopt,
+        waive: parsed.waive,
+      });
+
+      messages.push({ role: "assistant", content: JSON.stringify(parsed) });
+
+      if (planResult.ok) {
+        messages.push({
+          role: "user",
+          content:
+            "Plan applied. Continue investigating, or judge when the investigation is complete.",
+        });
+      } else {
+        messages.push({
+          role: "user",
+          content: `Plan rejected: ${planResult.message}`,
+        });
+      }
+
+      continue;
+    }
+
     messages.push({
       role: "user",
-      content: `Unknown response type. Respond with exactly one tool call or judgment JSON.`,
+      content: `Unknown response type. Respond with exactly one tool call, plan, or judgment JSON.`,
     });
   }
 
@@ -705,7 +731,7 @@ async function runEos(userInput, { workspace, chatFn = chat, maxIterations = 10 
         claim: "Investigation iteration limit reached without judgment",
         type: fallbackState,
         confidence: "low",
-        evidence_refs: [...investigation.inspectedFiles],
+        evidence_refs: [...investigation.inspectedEvidence],
       },
     ];
   }
@@ -806,9 +832,19 @@ function buildEvidenceBlock(
 }
 
   function buildSurface(userInput, investigation, judgment, restrictions, evidence, knowledge, decisions, traceability, reviews, previousJudgmentId = null, previousJudgmentDigest = null, commitReason = "judgment") {
-    const gaps = investigation.requiredFiles.filter(
-      (file) => !investigation.inspectedFiles.has(file)
+    const explicitMissing = [...investigation.explicitRequirements].filter(
+      (file) => !investigation.inspectedEvidence.has(file)
     );
+    const adoptedMissing = [...investigation.adoptedRequirements].filter(
+      (file) => !investigation.inspectedEvidence.has(file)
+    );
+    const gaps = [...explicitMissing, ...adoptedMissing];
+    const pendingRequirements = [...investigation.adoptedRequirements].filter(
+      (file) => !investigation.inspectedEvidence.has(file)
+    );
+    const unresolvedRelationships = investigation.discoveredDependencies
+      .filter((dependency) => dependency.status === "pending")
+      .map((dependency) => `${dependency.from} -> ${dependency.to}`);
 
     const recordedAt = new Date().toISOString();
     const investigationId = crypto.randomUUID();
@@ -827,9 +863,23 @@ function buildEvidenceBlock(
       commit_reason: commitReason,
       investigation: {
         target: investigation.target,
+        objective: investigation.objective,
+        explicit_requirements: [...investigation.explicitRequirements],
         required_evidence: investigation.requiredFiles,
-        inspected_evidence: [...investigation.inspectedFiles],
+        adopted_requirements: [...investigation.adoptedRequirements],
+        inspected_evidence: [...investigation.inspectedEvidence],
+        discovered_dependencies: investigation.discoveredDependencies.map(
+          (dependency) => ({
+            from: dependency.from,
+            specifier: dependency.specifier,
+            to: dependency.to,
+            status: dependency.status,
+            reason: dependency.reason,
+          })
+        ),
+        pending_requirements: pendingRequirements,
         gaps,
+        unresolved_relationships: unresolvedRelationships,
       },
       evidence: buildEvidenceBlock(
         evidence,

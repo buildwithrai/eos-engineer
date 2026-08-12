@@ -1,7 +1,14 @@
 import fs from "node:fs";
 import path from "node:path";
 
-export async function readFile({ path: filePath }, workspaceRoot) {
+export async function readFile({ path: filePath } = {}, workspaceRoot) {
+  if (typeof filePath !== "string" || filePath.length === 0) {
+    return {
+      ok: false,
+      error: "read_file input.path must be a non-empty string",
+    };
+  }
+
   const absolutePath = path.resolve(workspaceRoot, filePath);
 
   if (

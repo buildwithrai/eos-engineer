@@ -4,12 +4,34 @@ oneOf: [
 type: "object",
 properties: {
 type: { const: "tool" },
-tool: {
-type: "string",
-enum: ["read_file", "read_files"]
-},
+tool: { const: "read_file" },
 input: {
-type: "object"
+type: "object",
+properties: {
+path: { type: "string" }
+},
+required: ["path"],
+additionalProperties: false
+}
+},
+required: ["type", "tool", "input"],
+additionalProperties: false
+},
+{
+type: "object",
+properties: {
+type: { const: "tool" },
+tool: { const: "read_files" },
+input: {
+type: "object",
+properties: {
+paths: {
+type: "array",
+items: { type: "string" }
+}
+},
+required: ["paths"],
+additionalProperties: false
 }
 },
 required: ["type", "tool", "input"],
@@ -53,6 +75,30 @@ items: { type: "string" }
 }
 },
 required: ["type", "judgment", "restrictions"],
+additionalProperties: false
+},
+{
+type: "object",
+properties: {
+type: { const: "plan" },
+adopt: {
+type: "array",
+items: { type: "string" }
+},
+waive: {
+type: "array",
+items: {
+type: "object",
+properties: {
+path: { type: "string" },
+reason: { type: "string" }
+},
+required: ["path", "reason"],
+additionalProperties: false
+}
+}
+},
+required: ["type"],
 additionalProperties: false
 }
 ]
