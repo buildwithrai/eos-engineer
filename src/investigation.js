@@ -158,6 +158,7 @@ export function recordInspection(inv, inspection, workspaceRoot) {
 
   if (pending !== undefined) {
     pending.status = "adopted";
+    inv.adoptedRequirements.add(rel);
   }
 
   if (scopeOf(inv).has(rel)) {

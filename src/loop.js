@@ -52,6 +52,11 @@ Two possible responses:
 1. Tool call:
 {"type":"tool","tool":"read_file","input":{"path":"..."}}
 
+Tool paths are workspace-relative: the path in a read_file or read_files call
+is always relative to the repository root, e.g.
+"backend/src/events/processEvent.js". Never prefix a tool path with an
+absolute filesystem path such as "/workspace/...".
+
 2. Judgment:
 {"type":"judgment","judgment":[{"claim":"...","type":"declared|candidate|blocked","confidence":"high|medium|low","evidence_refs":["..."]}],"restrictions":["..."]}
 
@@ -105,8 +110,8 @@ read_file, or the exact repository-relative path represented by that result.
 Do not use labels such as "repository_content", "source", "file", or other
 descriptive aliases as evidence_refs.
 
-For example, if read_file returns:
-{"ok":true,"path":"/workspace/packages/workspace/src/indexer/RepositoryIndexer.ts",...}
+For example, if you call read_file with path "packages/workspace/src/indexer/RepositoryIndexer.ts"
+and read_file returns {"ok":true,"path":"/home/you/repo/packages/workspace/src/indexer/RepositoryIndexer.ts",...}
 
 then the evidence_ref must identify that inspected file, such as:
 "packages/workspace/src/indexer/RepositoryIndexer.ts".
