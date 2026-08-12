@@ -10,6 +10,7 @@ import {
   applyPlan,
   planningComplete,
   investigationComplete,
+  scopeOf,
 } from "./investigation.js";
 import {
   loadEvidence,
@@ -84,6 +85,13 @@ When investigating, gather the evidence required before returning a judgment.
       judgment. When re-verifying a prior judgment, cite the review record as
       review:<id> or its artifact path (.eos/reviews/<id>.json) in evidence_refs.
 
+Explicitly requested files are inspection obligations. Repository knowledge never
+substitutes for inspecting a requested file: even when a file is listed in
+REPOSITORY KNOWLEDGE, you must still call read_file (or read_files) on it before
+you may claim anything about its contents. A claim that a file was or is being
+inspected is supported only by a read_file/read_files result, never by repository
+knowledge.
+
 Never claim to have inspected a file unless the read_file tool returned it.
 
 A declared or candidate claim MUST reference only:
@@ -117,6 +125,69 @@ Never claim to have inspected a file unless read_file or read_files actually ret
 
 function normalizePath(filePath) {
   return filePath.replace(/\\/g, "/").replace(/^\/+/, "");
+}
+
+/**
+ * Actionable read directive for the model when required files remain
+ * uninspected. Only files that are actually in investigation scope are
+ * named; evidence refs that are not scope paths are never suggested as
+ * filesystem reads.
+ */
+function requiredReadDirective(investigation, files) {
+  const scope = scopeOf(investigation);
+  const missing = (Array.isArray(files) ? files : []).filter(
+    (file) => typeof file === "string" && file.length > 0 && scope.has(file)
+  );
+
+  if (missing.length === 0) return "";
+
+  return ` Call read_file or read_files with: ${missing.join(", ")}.`;
+}
+
+/**
+ * Guidance for a rejected plan. A plan entry that references an explicit
+ * requirement is not a discovered dependency and cannot be adopted or waived;
+ * the file is already required and must be inspected directly. The model is
+ * told exactly that instead of being left to guess.
+ */
+function planGuidance(parsed, investigation) {
+  const parts = [];
+
+  const adoptList = Array.isArray(parsed?.adopt) ? parsed.adopt : [];
+  const waiveList = Array.isArray(parsed?.waive) ? parsed.waive : [];
+
+  const adoptedExplicit = adoptList.filter(
+    (file) => typeof file === "string" && investigation.explicitRequirements.has(file)
+  );
+
+  if (adoptedExplicit.length > 0) {
+    parts.push(
+      `${adoptedExplicit.join(", ")} ${
+        adoptedExplicit.length === 1 ? "is" : "are"
+      } already an explicit requirement of this investigation and must be inspected with read_file or read_files, not adopted.`
+    );
+  }
+
+  const waivedExplicit = waiveList
+    .filter(
+      (entry) =>
+        entry !== null &&
+        typeof entry === "object" &&
+        !Array.isArray(entry) &&
+        typeof entry.path === "string" &&
+        investigation.explicitRequirements.has(entry.path)
+    )
+    .map((entry) => entry.path);
+
+  if (waivedExplicit.length > 0) {
+    parts.push(
+      `${waivedExplicit.join(", ")} ${
+        waivedExplicit.length === 1 ? "is" : "are"
+      } an explicit requirement of this investigation and cannot be waived; it must be inspected with read_file or read_files.`
+    );
+  }
+
+  return parts.length > 0 ? ` ${parts.join(" ")}` : "";
 }
 
 function buildSubstrateContext(evidence, knowledge, decisions, traceability, reviews) {
@@ -614,7 +685,7 @@ async function runEos(userInput, { workspace, chatFn = chat, maxIterations = 10 
               ? `You cannot finish yet. ${gate.message}`
               : gate.knowledge?.length > 0
                 ? `You cannot finish yet. ${gate.message}`
-                : `You cannot finish yet. ${gate.message}. Inspect the required evidence before judging.`,
+                : `You cannot finish yet. ${gate.message}. Inspect the required evidence before judging.${requiredReadDirective(investigation, gate.missing)}`,
         });
 
         continue;
@@ -706,7 +777,7 @@ async function runEos(userInput, { workspace, chatFn = chat, maxIterations = 10 
       } else {
         messages.push({
           role: "user",
-          content: `Plan rejected: ${planResult.message}`,
+          content: `Plan rejected: ${planResult.message}${planGuidance(parsed, investigation)}`,
         });
       }
 
