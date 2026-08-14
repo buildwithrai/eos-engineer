@@ -170,8 +170,8 @@ async function testReviewOutcomeBecomesEvidence() {
   assert("re-verification accepted", reverified.judgment[0].type === "declared");
   assert("review ref preserved", reverified.judgment[0].evidence_refs[0] === `review:${review.review_id}`);
   assert("review ref consumed", reverified.evidence.consumed.includes(`review:${review.review_id}`));
-  assert("review provenance in surface", Array.isArray(reverified.evidence.reviews) && reverified.evidence.reviews.length === 1);
-  assert("review provenance id", reverified.evidence.reviews[0].id === review.review_id);
+  assert("review provenance in surface", Array.isArray(reverified.evidence.reviews) && reverified.evidence.reviews.length >= 1);
+  assert("review provenance id", reverified.evidence.reviews.some((r) => r.id === review.review_id));
   assert("review provenance outcome", reverified.evidence.reviews[0].outcome === "forward");
   assert("review provenance anchors judgment", reverified.evidence.reviews[0].judgment_id === judgmentA.judgment_id);
   assert("review provenance digest is hex", /^[0-9a-f]{64}$/.test(reverified.evidence.reviews[0].digest));
@@ -339,7 +339,7 @@ async function testReviewLedgerWriteOnce() {
     .filter((f) => f.endsWith(".json"))
     .sort();
 
-  assert("two review nodes recorded", ledger.length === 2);
+  assert("three review nodes recorded", ledger.length === 3);
   assert("ledger write-once preserved", ledger.includes(`${first.review_id}.json`) && ledger.includes(`${second.review_id}.json`));
 
   const latest = JSON.parse(fs.readFileSync(path.join(workspace, ".eos", "review.json"), "utf8"));

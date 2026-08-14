@@ -4,6 +4,8 @@ import crypto from "node:crypto";
 import { sha256, loadLatestProjection } from "./lineage.js";
 import { loadEvidence, findEvidence, loadKnowledge } from "./evidence.js";
 import { isKnowledgeRef } from "./knowledge.js";
+import { loadChanges, changeIdFromRef, changeVerdictOutcome } from "./change.js";
+import { loadIntents, intentIdFromRef } from "./formation.js";
 
 export const REVIEW_OUTCOMES = ["forward", "neutral", "regression", "unresolved"];
 
@@ -76,6 +78,11 @@ export function loadReviews(root) {
       digest: sha256(raw),
     });
   }
+
+  items.sort((a, b) => {
+    const atDiff = a.review.reviewed_at.localeCompare(b.review.reviewed_at);
+    return atDiff !== 0 ? atDiff : a.review.review_id.localeCompare(b.review.review_id);
+  });
 
   return items;
 }
@@ -250,6 +257,37 @@ export function resolveRefOutcome(ref, context) {
     };
   }
 
+  const changeId = changeIdFromRef(ref);
+
+  if (changeId !== null) {
+    const changes = context.changes ?? loadChanges(context.workspaceRoot);
+    const record = changes.find((entry) => entry.change.change_id === changeId);
+
+    if (record === undefined) return { outcome: "unresolved" };
+
+    return { outcome: changeVerdictOutcome(record.change) };
+  }
+
+  const intentId = intentIdFromRef(ref);
+
+  if (intentId !== null) {
+    const intents = context.intents ?? loadIntents(context.workspaceRoot);
+
+    if (intents.length === 0) return { outcome: "unresolved" };
+
+    if (intentId === "latest") {
+      const ids = intents.map((record) => record.intent.intent_id).sort();
+      const latestId = ids[ids.length - 1];
+      return intents.some((record) => record.intent.intent_id === latestId)
+        ? { outcome: "forward" }
+        : { outcome: "unresolved" };
+    }
+
+    return intents.some((record) => record.intent.intent_id === intentId)
+      ? { outcome: "forward" }
+      : { outcome: "unresolved" };
+  }
+
   if (isKnowledgeRef(ref, context.knowledge)) {
     return { outcome: "forward" };
   }
@@ -277,6 +315,8 @@ export function runReview(workspaceRoot, judgmentId = null) {
     evidenceItems: loadEvidence(workspaceRoot),
     knowledge: loadKnowledge(workspaceRoot),
     reviews: loadReviews(workspaceRoot),
+    changes: loadChanges(workspaceRoot),
+    intents: loadIntents(workspaceRoot),
     inspections: target.node.evidence?.inspections ?? [],
   };
 

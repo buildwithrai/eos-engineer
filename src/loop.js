@@ -10,6 +10,7 @@ import {
   applyPlan,
   planningComplete,
   investigationComplete,
+  phaseOf,
   scopeOf,
 } from "./investigation.js";
 import {
@@ -32,11 +33,19 @@ import {
 } from "./knowledge.js";
 import {
   loadReviews,
+  runReview,
   isReviewRef,
   isPersistedReviewRef,
   resolveRefOutcome,
   reviewIdFromRef,
 } from "./review.js";
+import { loadChanges, isChangeRef } from "./change.js";
+import {
+  detectFormation,
+  loadIntents,
+  persistIntent,
+  isIntentRef,
+} from "./formation.js";
 
 const tools = { read_file: readFile, read_files: readFiles };
 
@@ -89,6 +98,9 @@ When investigating, gather the evidence required before returning a judgment.
       Review records are explicit evidence artifacts produced from a committed
       judgment. When re-verifying a prior judgment, cite the review record as
       review:<id> or its artifact path (.eos/reviews/<id>.json) in evidence_refs.
+      Engineering change records are explicit evidence artifacts produced from a
+      committed and executed engineering change. When building on or re-verifying
+      a prior change, cite the change record as change:<id> in evidence_refs.
 
 Explicitly requested files are inspection obligations. Repository knowledge never
 substitutes for inspecting a requested file: even when a file is listed in
@@ -126,10 +138,117 @@ waive means a discovered dependency is disposed of and does not require inspecti
 Reading a discovered dependency implicitly adopts it.
 candidate and declared judgments cannot be accepted while discovered relationships remain undisposed (pending). Dispose of them with adopt or waive before judging.
 Never claim to have inspected a file unless read_file or read_files actually returned it.
+
+After every tool result, plan attempt, and rejected judgment, the runtime reports
+the current INVESTIGATION STATE (phase, requirements, inspected evidence, and
+disposed/pending relationships). Only Phase: complete admits candidate and declared
+judgment. Rely on the reported INVESTIGATION STATE instead of recalling earlier turns.
+`;
+
+const FORMATION_GUIDANCE = `
+PROJECT FORMATION MODE
+
+This request is project formation: the workspace is greenfield (no repository
+substrate to investigate) or the request explicitly asks to form a project.
+The engineer's intent is the evidence object of this investigation. It has
+been recorded and is citable as intent:<id>, as .eos/formation/intent.json,
+or as the record path under .eos/formation/records/.
+
+Reason over the recorded intent and any existing substrate, and produce a
+project-formation result as EOS judgment claims: mission, objectives, scope
+and out-of-scope, constraints, stakeholders, success criteria, deliverables,
+risks, dependencies, and open questions.
+
+The formation result is a CANDIDATE proposal, never canonical project state:
+- EOS never substitutes for the Engineer.
+- EOS never owns canonical project artifacts.
+- Canonicalization (declaring the charter) is the Engineer's act; materializing
+  project files belongs to the deterministic change pipeline.
+Make this boundary explicit in restrictions, for example:
+"This charter is a candidate proposal; canonical declaration is the Engineer's act."
 `;
 
 function normalizePath(filePath) {
   return filePath.replace(/\\/g, "/").replace(/^\/+/, "");
+}
+
+/**
+ * Deterministic, model-facing rendering of the current investigation state.
+ *
+ * This is the runtime's first-class investigation lifecycle report. It is
+ * recomputed from the investigation state after every action (tool result,
+ * plan, rejected judgment) so the model never has to reconstruct scope,
+ * requirements, or relationship dispositions from earlier turns.
+ */
+function investigationStatusBlock(investigation) {
+  const phase = phaseOf(investigation);
+  const pending = investigation.discoveredDependencies.filter(
+    (dependency) => dependency.status === "pending"
+  );
+  const waived = investigation.discoveredDependencies.filter(
+    (dependency) => dependency.status === "waived"
+  );
+
+  const lines = [
+    "INVESTIGATION STATE",
+    `Mode: ${investigation.mode}`,
+    `Phase: ${phase}`,
+  ];
+
+  if (investigation.mode === "formation") {
+    lines.push(
+      "Formation: project-formation investigation. The recorded engineer intent is citable evidence (intent:<id> or the record path). The formation result is a candidate proposal; canonicalization is the Engineer's act."
+    );
+  }
+
+  if (investigation.explicitRequirements.size > 0) {
+    lines.push(
+      `Explicit requirements: ${[...investigation.explicitRequirements].join(", ")}`
+    );
+  }
+
+  if (investigation.adoptedRequirements.size > 0) {
+    lines.push(
+      `Adopted requirements: ${[...investigation.adoptedRequirements].join(", ")}`
+    );
+  }
+
+  if (investigation.inspectedEvidence.size > 0) {
+    lines.push(
+      `Inspected evidence: ${[...investigation.inspectedEvidence].join(", ")}`
+    );
+  }
+
+  if (pending.length > 0) {
+    lines.push(
+      `Pending discovered relationships (adopt or waive before judging): ${pending
+        .map((dependency) => `${dependency.from} -> ${dependency.to}`)
+        .join(", ")}`
+    );
+  }
+
+  if (waived.length > 0) {
+    lines.push(
+      `Waived relationships: ${waived
+        .map(
+          (dependency) =>
+            `${dependency.from} -> ${dependency.to} (${dependency.reason ?? "no reason"})`
+        )
+        .join(", ")}`
+    );
+  }
+
+  lines.push(
+    phase === "complete"
+      ? "The investigation is complete; candidate and declared judgment are permitted."
+      : "The investigation is not complete; candidate and declared judgment are rejected until it is."
+  );
+
+  return lines.join("\n");
+}
+
+function withInvestigationState(investigation, content) {
+  return `${content}\n\n${investigationStatusBlock(investigation)}`;
 }
 
 /**
@@ -195,7 +314,7 @@ function planGuidance(parsed, investigation) {
   return parts.length > 0 ? ` ${parts.join(" ")}` : "";
 }
 
-function buildSubstrateContext(evidence, knowledge, decisions, traceability, reviews) {
+function buildSubstrateContext(evidence, knowledge, decisions, traceability, reviews, changes = [], intents = []) {
   const parts = [];
 
   if (knowledge !== undefined) {
@@ -219,6 +338,26 @@ function buildSubstrateContext(evidence, knowledge, decisions, traceability, rev
     parts.push(`REVIEW EVIDENCE\nReview refs available for citation:\n${lines.join("\n")}`);
   } else {
     parts.push("REVIEW EVIDENCE\n(none — no review evidence recorded)");
+  }
+
+  if (changes.length > 0) {
+    const lines = changes.map(
+      ({ change }) =>
+        `- change:${change.change_id} [${change.status}] ${change.contract.target} (source judgment ${change.contract.source_judgment_id})`
+    );
+    parts.push(`ENGINEERING OUTCOME RECORDS\nChange records available for citation:\n${lines.join("\n")}`);
+  } else {
+    parts.push("ENGINEERING OUTCOME RECORDS\n(none — no engineering change records)");
+  }
+
+  if (intents.length > 0) {
+    const lines = intents.map(
+      ({ intent, source }) =>
+        `- intent:${intent.intent_id} (recorded ${intent.recorded_at})\n  ${intent.intent}`
+    );
+    parts.push(
+      `ENGINEERING INTENT\nProject-formation intent records available for citation as intent:<id> or by record path:\n${lines.join("\n")}`
+    );
   }
 
   if (decisions.length > 0) {
@@ -387,7 +526,9 @@ function isPersistedJudgmentRef(ref, workspaceRoot) {
     workspaceRoot,
     evidence = [],
     knowledge = undefined,
-    reviews = []
+    reviews = [],
+    changes = [],
+    intents = []
   ) {
     const absoluteRoot = normalizePath(workspaceRoot);
 
@@ -404,6 +545,18 @@ function isPersistedJudgmentRef(ref, workspaceRoot) {
         // Review references are canonical as-is. Never normalize them as
         // filesystem paths.
         if (isReviewRef(ref, reviews)) {
+          return ref;
+        }
+
+        // Engineering change references are canonical as-is. Never normalize
+        // them as filesystem paths.
+        if (isChangeRef(ref, changes)) {
+          return ref;
+        }
+
+        // Formation intent references are canonical as-is. Never normalize
+        // them as filesystem paths.
+        if (isIntentRef(ref, intents)) {
           return ref;
         }
 
@@ -443,7 +596,9 @@ function isPersistedJudgmentRef(ref, workspaceRoot) {
   evidence = [],
   knowledge = undefined,
   workspaceRoot = undefined,
-  reviews = []
+  reviews = [],
+  changes = [],
+  intents = []
 ) {
   const inspected = [...investigation.inspectedEvidence];
 
@@ -536,6 +691,10 @@ function isPersistedJudgmentRef(ref, workspaceRoot) {
 
       const backedByReview = isReviewRef(ref, reviews);
 
+      const backedByChange = isChangeRef(ref, changes);
+
+      const backedByIntent = isIntentRef(ref, intents);
+
       const persistedJudgmentRef =
         workspaceRoot !== undefined &&
         isPersistedJudgmentRef(ref, workspaceRoot);
@@ -552,7 +711,9 @@ function isPersistedJudgmentRef(ref, workspaceRoot) {
           requiredEvidenceInspected ||
           backedByEvidenceStore ||
           backedByKnowledge ||
-          backedByReview
+          backedByReview ||
+          backedByChange ||
+          backedByIntent
         )
       );
     });
@@ -601,30 +762,73 @@ async function runEos(userInput, { workspace, chatFn = chat, maxIterations = 10 
     }
   }
 
-  const investigation = createInvestigation(userInput);
+  const formation = detectFormation(workspaceRoot, userInput);
+
+  const investigation = createInvestigation(userInput, {
+    mode: formation.mode,
+    workspaceRoot,
+  });
 
   const evidence = loadEvidence(workspaceRoot);
   const knowledge = loadKnowledge(workspaceRoot);
   const decisions = loadDecisions(workspaceRoot);
   const traceability = loadTraceability(workspaceRoot);
   const reviews = loadReviews(workspaceRoot);
+  const changes = loadChanges(workspaceRoot);
+
+  let intents = [];
+
+  if (formation.mode === "formation") {
+    const persisted = persistIntent(workspaceRoot, userInput);
+    intents = loadIntents(workspaceRoot);
+
+    const recordPath = path.relative(workspaceRoot, persisted.source);
+    const read = await readFile({ path: recordPath }, workspaceRoot);
+
+    if (read.ok) {
+      recordInspection(investigation, read, workspaceRoot);
+      investigation.inspections.push(read);
+    }
+
+    const pointerPath = path.relative(
+      workspaceRoot,
+      path.join(workspaceRoot, ".eos", "formation", "intent.json")
+    );
+    const pointer = await readFile({ path: pointerPath }, workspaceRoot);
+
+    if (pointer.ok) {
+      recordInspection(investigation, pointer, workspaceRoot);
+      investigation.inspections.push(pointer);
+    }
+  }
 
   const reviewContext = {
     workspaceRoot,
     evidenceItems: evidence,
     knowledge,
     reviews,
+    changes,
+    intents,
     inspections: investigation.inspections,
   };
 
-  const substrateContext = buildSubstrateContext(evidence, knowledge, decisions, traceability, reviews);
+  const substrateContext = buildSubstrateContext(evidence, knowledge, decisions, traceability, reviews, changes, intents);
+
+  const baseSystem = substrateContext
+    ? `${SYSTEM_PROMPT}\n\n${substrateContext}`
+    : SYSTEM_PROMPT;
+
+  const systemContent =
+    formation.mode === "formation"
+      ? `${baseSystem}\n\n${FORMATION_GUIDANCE}`
+      : baseSystem;
 
   const messages = [
     {
       role: "system",
-      content: substrateContext ? `${SYSTEM_PROMPT}\n\n${substrateContext}` : SYSTEM_PROMPT,
+      content: systemContent,
     },
-    { role: "user", content: userInput },
+    { role: "user", content: withInvestigationState(investigation, userInput) },
   ];
 
   let finalJudgment = null;
@@ -644,7 +848,10 @@ async function runEos(userInput, { workspace, chatFn = chat, maxIterations = 10 
     } catch (e) {
       messages.push({
         role: "user",
-        content: `Invalid JSON. Respond with exactly one tool call or judgment JSON.`,
+        content: withInvestigationState(
+          investigation,
+          `Invalid JSON. Respond with exactly one tool call or judgment JSON.`
+        ),
       });
       continue;
     }
@@ -659,14 +866,16 @@ async function runEos(userInput, { workspace, chatFn = chat, maxIterations = 10 
           });
           messages.push({
             role: "user",
-            content:
-              "You cannot finish yet. A judgment must contain at least one claim.",
+            content: withInvestigationState(
+              investigation,
+              "You cannot finish yet. A judgment must contain at least one claim."
+            ),
           });
           continue;
         }
 
       const canonicalItems =
-        canonicalizeEvidenceRefs(items, workspaceRoot, evidence, knowledge, reviews);
+        canonicalizeEvidenceRefs(items, workspaceRoot, evidence, knowledge, reviews, changes, intents);
 
       const gate = gateJudgment(
         canonicalItems,
@@ -674,7 +883,9 @@ async function runEos(userInput, { workspace, chatFn = chat, maxIterations = 10 
         evidence,
         knowledge,
         workspaceRoot,
-        reviews
+        reviews,
+        changes,
+        intents
       );
 
       if (!gate.ok) {
@@ -685,12 +896,14 @@ async function runEos(userInput, { workspace, chatFn = chat, maxIterations = 10 
 
         messages.push({
           role: "user",
-          content:
+          content: withInvestigationState(
+            investigation,
             gate.reason === "state"
               ? `You cannot finish yet. ${gate.message}`
               : gate.knowledge?.length > 0
                 ? `You cannot finish yet. ${gate.message}`
-                : `You cannot finish yet. ${gate.message}. Inspect the required evidence before judging.${requiredReadDirective(investigation, gate.missing)}`,
+                : `You cannot finish yet. ${gate.message}. Inspect the required evidence before judging.${requiredReadDirective(investigation, gate.missing)}`
+          ),
         });
 
         continue;
@@ -712,7 +925,10 @@ async function runEos(userInput, { workspace, chatFn = chat, maxIterations = 10 
 
         messages.push({
           role: "user",
-          content: `You cannot finish yet. Judging as "${nextStatus}" is not a legal transition from the previous state "${previousStatus}". Legal transitions are blocked -> candidate -> declared, plus one-level downgrades (declared -> candidate, candidate -> blocked) when a cited reference resolves to a regression outcome.`,
+          content: withInvestigationState(
+            investigation,
+            `You cannot finish yet. Judging as "${nextStatus}" is not a legal transition from the previous state "${previousStatus}". Legal transitions are blocked -> candidate -> declared, plus one-level downgrades (declared -> candidate, candidate -> blocked) when a cited reference resolves to a regression outcome.`
+          ),
         });
 
         continue;
@@ -761,7 +977,10 @@ async function runEos(userInput, { workspace, chatFn = chat, maxIterations = 10 
       }
 
       messages.push({ role: "assistant", content: JSON.stringify(parsed) });
-      messages.push({ role: "tool", content: JSON.stringify(result) });
+      messages.push({
+        role: "tool",
+        content: withInvestigationState(investigation, JSON.stringify(result)),
+      });
       continue;
     }
 
@@ -773,29 +992,44 @@ async function runEos(userInput, { workspace, chatFn = chat, maxIterations = 10 
 
       messages.push({ role: "assistant", content: JSON.stringify(parsed) });
 
-      if (planResult.ok) {
-        messages.push({
-          role: "user",
-          content:
-            "Plan applied. Continue investigating, or judge when the investigation is complete.",
-        });
-      } else {
+      if (!planResult.ok) {
         const uninspectedExplicit = [...investigation.explicitRequirements].filter(
           (file) => !investigation.inspectedEvidence.has(file)
         );
 
         messages.push({
           role: "user",
-          content: `Plan rejected: ${planResult.message}${planGuidance(parsed, investigation)}${requiredReadDirective(investigation, uninspectedExplicit)}`,
+          content: withInvestigationState(
+            investigation,
+            `Plan rejected: ${planResult.message}${planGuidance(parsed, investigation)}${requiredReadDirective(investigation, uninspectedExplicit)}`
+          ),
         });
+
+        continue;
       }
+
+      const uninspectedScope = [...scopeOf(investigation)].filter(
+        (file) => !investigation.inspectedEvidence.has(file)
+      );
+
+      const message = planResult.mutated
+        ? "Plan applied. Continue investigating, or judge when the investigation is complete."
+        : `Plan produced no investigation-state change.${requiredReadDirective(investigation, uninspectedScope)} Continue investigating, or judge when the investigation is complete.`;
+
+      messages.push({
+        role: "user",
+        content: withInvestigationState(investigation, message),
+      });
 
       continue;
     }
 
     messages.push({
       role: "user",
-      content: `Unknown response type. Respond with exactly one tool call, plan, or judgment JSON.`,
+      content: withInvestigationState(
+        investigation,
+        `Unknown response type. Respond with exactly one tool call, plan, or judgment JSON.`
+      ),
     });
   }
 
@@ -828,10 +1062,13 @@ async function runEos(userInput, { workspace, chatFn = chat, maxIterations = 10 
     reviews,
     priorJudgmentId,
     previousJudgmentDigest,
-    commitReason
+    commitReason,
+    changes,
+    intents
   );
 
   commitProjection(workspaceRoot, surface);
+  runReview(workspaceRoot, surface.judgment_id);
 
   return surface;
 }
@@ -843,7 +1080,9 @@ function buildEvidenceBlock(
   decisions,
   traceability,
   reviews,
-  judgment
+  judgment,
+  changes = [],
+  intents = []
 ) {
   const consumed = new Set();
 
@@ -907,11 +1146,24 @@ function buildEvidenceBlock(
       source,
       digest,
     })),
+    changes: changes.map(({ change, source, digest }) => ({
+      id: change.change_id,
+      status: change.status,
+      target: change.contract?.target,
+      source_judgment_id: change.contract?.source_judgment_id,
+      source,
+      digest,
+    })),
+    intents: intents.map(({ intent, source, digest }) => ({
+      id: intent.intent_id,
+      source,
+      digest,
+    })),
     consumed: [...consumed],
   };
 }
 
-  function buildSurface(userInput, investigation, judgment, restrictions, evidence, knowledge, decisions, traceability, reviews, previousJudgmentId = null, previousJudgmentDigest = null, commitReason = "judgment") {
+  function buildSurface(userInput, investigation, judgment, restrictions, evidence, knowledge, decisions, traceability, reviews, previousJudgmentId = null, previousJudgmentDigest = null, commitReason = "judgment", changes = [], intents = []) {
     const explicitMissing = [...investigation.explicitRequirements].filter(
       (file) => !investigation.inspectedEvidence.has(file)
     );
@@ -938,12 +1190,15 @@ function buildEvidenceBlock(
       investigation_id: investigationId,
       recorded_at: recordedAt,
       status,
+      mode: investigation.mode,
       previous_judgment_id: previousJudgmentId,
       previous_judgment_digest: previousJudgmentDigest,
       commit_reason: commitReason,
       investigation: {
         target: investigation.target,
         objective: investigation.objective,
+        mode: investigation.mode,
+        phase: phaseOf(investigation),
         explicit_requirements: [...investigation.explicitRequirements],
         required_evidence: investigation.requiredFiles,
         adopted_requirements: [...investigation.adoptedRequirements],
@@ -960,6 +1215,7 @@ function buildEvidenceBlock(
         pending_requirements: pendingRequirements,
         gaps,
         unresolved_relationships: unresolvedRelationships,
+        prospective_artifacts: [...investigation.prospectiveArtifacts],
       },
       evidence: buildEvidenceBlock(
         evidence,
@@ -968,8 +1224,27 @@ function buildEvidenceBlock(
         decisions,
         traceability,
         reviews,
-        judgment
+        judgment,
+        changes,
+        intents
       ),
+      formation:
+        investigation.mode === "formation"
+          ? {
+              mode: "formation",
+              intent_records: intents.map(({ intent, source, digest }) => ({
+                id: intent.intent_id,
+                path: normalizePath(source),
+                digest,
+              })),
+              prospective_artifacts: [...investigation.prospectiveArtifacts],
+              boundary: {
+                status: "candidate",
+                canonical_owner: "Engineer",
+                eos_writes_canonical_project_state: false,
+              },
+            }
+          : undefined,
       judgment: judgment.map((item) => ({
         ...item,
         evidence_refs: Array.isArray(item.evidence_refs) ? item.evidence_refs : [],

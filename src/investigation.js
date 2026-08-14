@@ -89,9 +89,25 @@ export function extractScopeDependencies(content, fromFile, workspaceRoot) {
  *
  * explicitRequirements preserves the existing regex extraction behavior.
  * requiredFiles is kept as a compatibility alias of explicitRequirements.
+ *
+ * options.mode distinguishes the investigation lifecycle:
+ * - "repository" (default): the object of investigation is repository
+ *   evidence; every referenced file is an inspection obligation exactly as
+ *   before.
+ * - "formation": the object of investigation is the project definition and
+ *   the engineer's recorded intent is its evidence basis. Referenced files
+ *   are inspection obligations only when they exist on disk; non-existent
+ *   referenced files are prospective artifacts (candidate outputs), not
+ *   inspection obligations. options.workspaceRoot is required for the
+ *   existence check.
  */
-export function createInvestigation(userInput) {
+export function createInvestigation(userInput, options = {}) {
+  const mode = options.mode === "formation" ? "formation" : "repository";
+  const workspaceRoot =
+    typeof options.workspaceRoot === "string" ? options.workspaceRoot : null;
+
   const explicitRequirements = new Set();
+  const prospectiveArtifacts = [];
 
   const filePattern =
     /(?:^|[\s"'`(])((?:\.\/)?(?:[\w.-]+\/)*[\w.-]+\.(?:js|ts|tsx|jsx|json|md|sql|yaml|yml|py|sh))(?=$|[\s"'`),.:;])/g;
@@ -103,17 +119,35 @@ export function createInvestigation(userInput) {
     const candidate = match[1].trim();
 
     if (
-      !candidate.endsWith(".") &&
-      !candidate.startsWith("Do ") &&
-      !candidate.startsWith("http")
+      candidate.endsWith(".") ||
+      candidate.startsWith("Do ") ||
+      candidate.startsWith("http")
     ) {
-      explicitRequirements.add(normalizePath(candidate));
+      continue;
+    }
+
+    const normalized = normalizePath(candidate);
+
+    if (mode === "formation") {
+      const absolute =
+        workspaceRoot === null
+          ? null
+          : path.resolve(workspaceRoot, normalized);
+
+      if (absolute !== null && fs.existsSync(absolute)) {
+        explicitRequirements.add(normalized);
+      } else {
+        prospectiveArtifacts.push(normalized);
+      }
+    } else {
+      explicitRequirements.add(normalized);
     }
   }
 
   const firstLine = input.split("\n")[0] ?? "";
 
   return {
+    mode,
     target: firstLine.slice(0, 200),
     objective: firstLine.slice(0, 200),
     explicitRequirements,
@@ -122,6 +156,7 @@ export function createInvestigation(userInput) {
     inspectedEvidence: new Set(),
     discoveredDependencies: [],
     inspections: [],
+    prospectiveArtifacts,
   };
 }
 
@@ -167,14 +202,25 @@ export function recordInspection(inv, inspection, workspaceRoot) {
       rel,
       workspaceRoot
     )) {
-      if (
-        !inv.discoveredDependencies.some(
-          (existing) =>
-            existing.from === dependency.from && existing.to === dependency.to
-        )
-      ) {
-        inv.discoveredDependencies.push(dependency);
+      const existing = inv.discoveredDependencies.find(
+        (candidate) =>
+          candidate.from === dependency.from && candidate.to === dependency.to
+      );
+
+      if (existing !== undefined) {
+        continue;
       }
+
+      // Relationship discovery is order-independent. If the target was
+      // already inspected before this relationship was discovered, the
+      // relationship is already disposed by that inspection and must not
+      // become a new pending obligation.
+      if (inv.inspectedEvidence.has(dependency.to)) {
+        dependency.status = "adopted";
+        inv.adoptedRequirements.add(dependency.to);
+      }
+
+      inv.discoveredDependencies.push(dependency);
     }
   }
 }
@@ -199,11 +245,18 @@ export function scopeOf(inv) {
  *   reason.
  * - An adopted dependency becomes an investigation requirement.
  * - A waived dependency becomes terminal and does not require inspection.
+ *
+ * Returns { ok: false, message } on an invalid plan and { ok: true, mutated }
+ * on a valid one. `mutated` reports whether any dependency disposition
+ * actually changed (pending -> adopted, pending -> waived). A valid plan
+ * that re-adopts/re-waives already-disposed dependencies is accepted but
+ * reports mutated: false because it advances no investigation state.
  */
 export function applyPlan(inv, { adopt = [], waive = [] } = {}) {
   const errors = [];
   const adoptList = Array.isArray(adopt) ? adopt : [];
   const waiveList = Array.isArray(waive) ? waive : [];
+  let mutated = false;
 
   for (const file of adoptList) {
     if (typeof file !== "string" || file.length === 0) {
@@ -223,8 +276,11 @@ export function applyPlan(inv, { adopt = [], waive = [] } = {}) {
       continue;
     }
 
-    dependency.status = "adopted";
-    inv.adoptedRequirements.add(dependency.to);
+    if (dependency.status !== "adopted") {
+      dependency.status = "adopted";
+      inv.adoptedRequirements.add(dependency.to);
+      mutated = true;
+    }
   }
 
   for (const entry of waiveList) {
@@ -257,7 +313,11 @@ export function applyPlan(inv, { adopt = [], waive = [] } = {}) {
       continue;
     }
 
-    dependency.status = "waived";
+    if (dependency.status !== "waived") {
+      dependency.status = "waived";
+      mutated = true;
+    }
+
     dependency.reason = entry.reason.trim();
   }
 
@@ -265,7 +325,7 @@ export function applyPlan(inv, { adopt = [], waive = [] } = {}) {
     return { ok: false, message: errors.join(" ") };
   }
 
-  return { ok: true };
+  return { ok: true, mutated };
 }
 
 /**
@@ -278,10 +338,51 @@ export function planningComplete(inv) {
 }
 
 /**
+ * Deterministic investigation phase derived entirely from current state.
+ *
+ * - "formation": a formation-mode investigation whose evidence obligations
+ *   are satisfied (the recorded intent plus any existing-file inspections).
+ *   Formation completion admits judgment; a formation investigation with an
+ *   uninspected existing-file requirement reports "inspecting" instead.
+ * - "planning": a discovered dependency remains pending and must be adopted
+ *   or waived before candidate/declared judgment.
+ * - "inspecting": planning is complete but an explicit or adopted
+ *   requirement remains uninspected.
+ * - "complete": planning and inspection are both complete; candidate and
+ *   declared judgment are permitted.
+ *
+ * The phase is never stored. It is always recomputed from state, so it
+ * cannot drift from the investigation state that produced it. The runtime
+ * uses it as the explicit completion transition: when it becomes "complete"
+ * or "formation", the loop acknowledges that candidate/declared judgment is
+ * admitted.
+ */
+export function phaseOf(inv) {
+  if (inv.mode === "formation" && investigationComplete(inv)) {
+    return "formation";
+  }
+
+  if (inv.discoveredDependencies.some((d) => d.status === "pending")) {
+    return "planning";
+  }
+
+  if (!investigationComplete(inv)) {
+    return "inspecting";
+  }
+
+  return "complete";
+}
+
+/**
  * Investigation completeness: every explicit and adopted requirement has been
  * inspected.
  */
 export function investigationComplete(inv) {
+  // Investigation cannot be complete while any discovered relationship
+  // remains unresolved. Planning completion is therefore a prerequisite
+  // for investigation completion.
+  if (!planningComplete(inv)) return false;
+
   for (const file of inv.explicitRequirements) {
     if (!inv.inspectedEvidence.has(file)) return false;
   }
