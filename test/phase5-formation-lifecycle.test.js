@@ -335,12 +335,81 @@ async function testDetectionAndLedgerSemantics() {
   fs.rmSync(substrateWs, { recursive: true, force: true });
 }
 
+async function testFormationDetectionIsRequestIntent() {
+  freshRepoWorkspace();
+
+  const audit =
+    "Perform a reverse-engineering audit of the Omnia Workspace ecosystem: " +
+    "examine the project formation decision, the project charter, the " +
+    "formation process, the project constitution, the governing artifacts, " +
+    "and the lifecycle. Report findings without forming anything.";
+
+  assert(
+    "F6 audit discussing formation topics stays repository mode",
+    detectFormation(workspace, audit).mode === "repository"
+  );
+  assert(
+    "F6 audit discussion never classified as formation",
+    detectFormation(workspace, audit).reasons.includes("formation-marker") === false
+  );
+
+  const surface = await runEos(audit, {
+    workspace,
+    chatFn: async () => ({
+      content: JSON.stringify({
+        type: "judgment",
+        judgment: [
+          {
+            claim: "audit findings",
+            type: "candidate",
+            confidence: "medium",
+            evidence_refs: [],
+          },
+        ],
+      }),
+    }),
+    maxIterations: 2,
+  });
+
+  assert(
+    "F6 audit end-to-end stays repository mode",
+    surface.mode === "repository"
+  );
+  assert(
+    "F6 no formation intent persisted for audit request",
+    loadIntents(workspace).length === 0
+  );
+  assert(
+    "F6 no formation boundary on audit result",
+    surface.formation === undefined
+  );
+
+  assert(
+    "F7 explicit create request classifies as formation",
+    detectFormation(
+      workspace,
+      "Create a new project for the irrigation controller."
+    ).mode === "formation"
+  );
+  assert(
+    "F7 explicit form request classifies as formation",
+    detectFormation(workspace, "Form a project for the widget builder.").mode ===
+      "formation"
+  );
+  assert(
+    "F7 explicit establish request classifies as formation",
+    detectFormation(workspace, "Establish a project from scratch.").mode ===
+      "formation"
+  );
+}
+
 async function main() {
   await testGreenfieldFormationEndToEnd();
   await testProspectiveArtifactNotInspectionObligation();
   await testExistingFileRemainsInspectionObligation();
   await testRepositoryModeUnchanged();
   await testDetectionAndLedgerSemantics();
+  await testFormationDetectionIsRequestIntent();
 
   if (failures > 0) {
     console.error(`${failures} failure(s)`);

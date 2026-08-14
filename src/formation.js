@@ -31,15 +31,20 @@ const SOURCE_EXTENSIONS = new Set([
   "sh",
 ]);
 
-const FORMATION_MARKERS = [
-  /\bproject charter\b/i,
-  /\bcharter\b/i,
-  /\bgreenfield\b/i,
-  /\bproject formation\b/i,
-  /\bnew project\b/i,
-  /create (?:a |the )?(?:new )?project\b/i,
-  /define (?:a |the |our )?project\b/i,
-];
+/**
+ * Project-formation request marker. Detection is request-intent based: a
+ * request classifies as formation only when it directs an act of project
+ * creation or constitution (create, form, establish, constitute, set up,
+ * stand up, initialize, scaffold) at a project object.
+ *
+ * Topical discussion of formation — charter, constitution, project
+ * formation, lifecycle, governing artifacts, greenfield, a new project — is
+ * never a formation request on its own. An audit/investigation that merely
+ * discusses such topics stays in repository mode; it does not persist a
+ * formation intent.
+ */
+const FORMATION_REQUEST =
+  /(?:create|form|establish|constitute|set up|stand up|initialize|scaffold)\s+(?:a |an |the |our |their )?(?:new )?project\b/i;
 
 function normalizePath(filePath) {
   return filePath.replace(/\\/g, "/").replace(/^\/+/, "");
@@ -97,8 +102,21 @@ function hasSourceFile(dir, seen = new Set()) {
  *
  * Hidden directories (.eos, .ewa, .ige, .git) are never treated as content;
  * substrate presence is checked explicitly against the known stores.
+ *
+ * A path that does not exist or is not a directory is never greenfield:
+ * absence of a target is an unavailable-workspace condition, not evidence of
+ * an empty project. Formation is admitted only for an existing directory or by
+ * an explicit formation request; it is never inferred from a missing path.
  */
 export function isGreenfield(root) {
+  if (!fs.existsSync(root)) return false;
+
+  try {
+    if (!fs.statSync(root).isDirectory()) return false;
+  } catch {
+    return false;
+  }
+
   const substratePresent =
     directoryHasJson(evidenceDirectory(root)) ||
     directoryHasJson(decisionsDirectory(root)) ||
@@ -113,14 +131,14 @@ export function isGreenfield(root) {
 }
 
 /**
- * Explicit project-formation request markers. This is a conservative
- * heuristic for formation requests made against workspaces that are not
- * empty; an empty workspace is classified as formation regardless of wording.
+ * Explicit project-formation request. This is a conservative heuristic for
+ * formation requests made against workspaces that are not empty; an empty
+ * workspace is classified as formation regardless of wording.
  */
 export function isFormationRequest(userInput) {
   const input = String(userInput ?? "");
 
-  return FORMATION_MARKERS.some((marker) => marker.test(input));
+  return FORMATION_REQUEST.test(input);
 }
 
 /**

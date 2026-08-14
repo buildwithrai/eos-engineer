@@ -45,7 +45,9 @@ import {
   loadIntents,
   persistIntent,
   isIntentRef,
+  isFormationRequest,
 } from "./formation.js";
+import { validateWorkspace } from "./workspace.js";
 
 const tools = { read_file: readFile, read_files: readFiles };
 
@@ -173,6 +175,118 @@ function normalizePath(filePath) {
 }
 
 /**
+ * Consecutive-iteration budget for investigation progress.
+ *
+ * A model action only counts as investigation progress when it materially
+ * changes investigation state: new evidence inspected, a requirement adopted,
+ * a dependency discovered or disposed, or any other deterministic transition.
+ * Repeated no-op actions (rejected plans, re-adoptions, rejected judgments,
+ * repeated reads of already-inspected files) advance no state. After
+ * NO_PROGRESS_LIMIT consecutive iterations with no state change, EOS
+ * terminates honestly as blocked rather than consuming the iteration budget
+ * on a self-consuming loop.
+ */
+const NO_PROGRESS_LIMIT = 3;
+
+/**
+ * Deterministic fingerprint of the investigation state used to detect
+ * no-progress. Only material investigation state participates: inspected
+ * evidence, adopted requirements, dependency dispositions, and prospective
+ * artifacts. Messages, feedback, and conversation history never count as
+ * progress.
+ */
+function investigationFingerprint(investigation) {
+  return JSON.stringify({
+    inspected: [...investigation.inspectedEvidence].sort(),
+    adopted: [...investigation.adoptedRequirements].sort(),
+    dependencies: investigation.discoveredDependencies
+      .map(
+        (dependency) =>
+          `${dependency.to}:${dependency.status}:${dependency.reason ?? ""}`
+      )
+      .sort(),
+    prospective: [...investigation.prospectiveArtifacts].sort(),
+  });
+}
+const NO_PROGRESS_CLAIM =
+  "Investigation terminated for no-progress: repeated actions produced no change to investigation state (no new evidence inspected, no requirement adopted, no dependency discovered or disposed).";
+
+const WORKSPACE_UNAVAILABLE_REASONS = {
+  missing: "path does not exist",
+  "not-a-directory": "path is not a directory",
+  inaccessible: "path is not accessible",
+};
+
+/**
+ * Deterministic blocked surface for an unavailable repository target.
+ *
+ * This result is returned in-memory and is never committed or reviewed: the
+ * workspace cannot be read (missing / not-a-directory / inaccessible), and
+ * writing a projection or a formation intent would fabricate a target that
+ * does not exist. No formation intent is ever created merely because a
+ * requested repository path does not exist.
+ */
+function buildUnavailableSurface(userInput, workspaceRoot, validation) {
+  const recordedAt = new Date().toISOString();
+  const firstLine = String(userInput ?? "").split("\n")[0] ?? "";
+  const reasonDetail = WORKSPACE_UNAVAILABLE_REASONS[validation.reason] ?? "path is unavailable";
+
+  const claim = `Blocked: requested workspace is unavailable (${validation.reason}): ${workspaceRoot} — ${reasonDetail}. No investigation was performed and no formation intent was recorded.`;
+
+  const surface = {
+    schema: "eos-judgment/v1",
+    judgment_id: crypto.randomUUID(),
+    investigation_id: crypto.randomUUID(),
+    recorded_at: recordedAt,
+    status: "blocked",
+    mode: "repository",
+    previous_judgment_id: null,
+    previous_judgment_digest: null,
+    commit_reason: "blocked",
+    investigation: {
+      target: firstLine.slice(0, 200),
+      objective: firstLine.slice(0, 200),
+      mode: "repository",
+      phase: "blocked",
+      explicit_requirements: [],
+      required_evidence: [],
+      adopted_requirements: [],
+      inspected_evidence: [],
+      discovered_dependencies: [],
+      pending_requirements: [],
+      gaps: [],
+      unresolved_relationships: [],
+      prospective_artifacts: [],
+    },
+    evidence: {
+      source: "ewa",
+      evidence: [],
+      inspections: [],
+      reviews: [],
+      changes: [],
+      intents: [],
+      consumed: [],
+    },
+    blocker: {
+      reason: "workspace-unavailable",
+      detail: validation.reason,
+      path: workspaceRoot,
+    },
+    judgment: [
+      {
+        claim,
+        type: "blocked",
+        confidence: "low",
+        evidence_refs: [],
+      },
+    ],
+    restrictions: [],
+  };
+
+  return surface;
+}
+
+/**
  * Deterministic, model-facing rendering of the current investigation state.
  *
  * This is the runtime's first-class investigation lifecycle report. It is
@@ -266,6 +380,38 @@ function requiredReadDirective(investigation, files) {
   if (missing.length === 0) return "";
 
   return ` Call read_file or read_files with: ${missing.join(", ")}.`;
+}
+
+/**
+ * Guidance for a rejected judgment.
+ *
+ * When the rejected evidence refs are knowledge citations ("REPOSITORY
+ * KNOWLEDGE" or symbol:/package:/import:/export:/dependency: refs) but no
+ * repository knowledge is loaded for this workspace, the model is told
+ * deterministically that the block is unavailable and that repository claims
+ * must be grounded in read_file/read_files inspection. Without this the model
+ * can cycle between a blanket knowledge citation and an inadmissible plan
+ * with no way to make progress.
+ */
+function rejectedJudgmentGuidance(gate, investigation, knowledge) {
+  const base =
+    gate.reason === "state"
+      ? `You cannot finish yet. ${gate.message}`
+      : gate.knowledge?.length > 0
+        ? `You cannot finish yet. ${gate.message}`
+        : `You cannot finish yet. ${gate.message}. Inspect the required evidence before judging.${requiredReadDirective(investigation, gate.missing)}`;
+
+  const missing = Array.isArray(gate.missing) ? gate.missing : [];
+
+  const knowledgeCitations = missing.filter(
+    (ref) => ref === "REPOSITORY KNOWLEDGE" || isKnowledgeEntityRef(ref)
+  );
+
+  if (knowledgeCitations.length === 0 || knowledge !== undefined) {
+    return base;
+  }
+
+  return `${base} No REPOSITORY KNOWLEDGE is loaded for this workspace: repository claims cannot be grounded in a repository-knowledge block. Inspect workspace files with read_file or read_files to ground repository claims.`;
 }
 
 /**
@@ -740,6 +886,19 @@ function isPersistedJudgmentRef(ref, workspaceRoot) {
 
 async function runEos(userInput, { workspace, chatFn = chat, maxIterations = 10 } = {}) {
   const workspaceRoot = path.resolve(workspace);
+
+  const workspaceValidation = validateWorkspace(workspaceRoot);
+
+  if (!workspaceValidation.ok) {
+    // A missing/unavailable repository target is a deterministic blocker.
+    // The only exception is an explicit formation request: project formation
+    // is the one flow that legitimately targets a path that does not exist
+    // yet. A missing path is never reinterpreted as formation on its own.
+    if (!isFormationRequest(userInput)) {
+      return buildUnavailableSurface(userInput, workspaceRoot, workspaceValidation);
+    }
+  }
+
   const lineage = verifyLineage(workspaceRoot);
   let previousStatus = loadJudgmentStatus(workspaceRoot);
 
@@ -834,8 +993,32 @@ async function runEos(userInput, { workspace, chatFn = chat, maxIterations = 10 
   let finalJudgment = null;
   let restrictions = [];
   let commitReason = "judgment";
+  let blocker = null;
+  let noProgressStreak = 0;
+  let previousFingerprint = null;
 
   for (let i = 0; i < maxIterations; i++) {
+    const fingerprint = investigationFingerprint(investigation);
+
+    if (previousFingerprint === null) {
+      previousFingerprint = fingerprint;
+    } else if (fingerprint !== previousFingerprint) {
+      noProgressStreak = 0;
+      previousFingerprint = fingerprint;
+    } else {
+      noProgressStreak += 1;
+
+      if (noProgressStreak >= NO_PROGRESS_LIMIT) {
+        commitReason = "no-progress";
+        blocker = {
+          reason: "no-progress",
+          detail: `${NO_PROGRESS_LIMIT} consecutive actions produced no investigation-state change`,
+          limit: NO_PROGRESS_LIMIT,
+        };
+        break;
+      }
+    }
+
     const response = await chatFn(messages);
 
       console.log(`\n=== EOS ITERATION ${i + 1} MODEL RESPONSE ===`);
@@ -898,11 +1081,7 @@ async function runEos(userInput, { workspace, chatFn = chat, maxIterations = 10 
           role: "user",
           content: withInvestigationState(
             investigation,
-            gate.reason === "state"
-              ? `You cannot finish yet. ${gate.message}`
-              : gate.knowledge?.length > 0
-                ? `You cannot finish yet. ${gate.message}`
-                : `You cannot finish yet. ${gate.message}. Inspect the required evidence before judging.${requiredReadDirective(investigation, gate.missing)}`
+            rejectedJudgmentGuidance(gate, investigation, knowledge)
           ),
         });
 
@@ -1034,20 +1213,31 @@ async function runEos(userInput, { workspace, chatFn = chat, maxIterations = 10 
   }
 
   if (!finalJudgment) {
-    commitReason = "fallback";
-
-    const fallbackState = isJudgmentState(previousStatus)
+    const terminalState = isJudgmentState(previousStatus)
       ? previousStatus
       : "blocked";
 
-    finalJudgment = [
-      {
-        claim: "Investigation iteration limit reached without judgment",
-        type: fallbackState,
-        confidence: "low",
-        evidence_refs: [...investigation.inspectedEvidence],
-      },
-    ];
+    if (commitReason === "no-progress") {
+      finalJudgment = [
+        {
+          claim: NO_PROGRESS_CLAIM,
+          type: terminalState,
+          confidence: "low",
+          evidence_refs: [...investigation.inspectedEvidence],
+        },
+      ];
+    } else {
+      commitReason = "fallback";
+
+      finalJudgment = [
+        {
+          claim: "Investigation iteration limit reached without judgment",
+          type: terminalState,
+          confidence: "low",
+          evidence_refs: [...investigation.inspectedEvidence],
+        },
+      ];
+    }
   }
 
   const surface = buildSurface(
@@ -1064,7 +1254,8 @@ async function runEos(userInput, { workspace, chatFn = chat, maxIterations = 10 
     previousJudgmentDigest,
     commitReason,
     changes,
-    intents
+    intents,
+    blocker
   );
 
   commitProjection(workspaceRoot, surface);
@@ -1163,7 +1354,7 @@ function buildEvidenceBlock(
   };
 }
 
-  function buildSurface(userInput, investigation, judgment, restrictions, evidence, knowledge, decisions, traceability, reviews, previousJudgmentId = null, previousJudgmentDigest = null, commitReason = "judgment", changes = [], intents = []) {
+  function buildSurface(userInput, investigation, judgment, restrictions, evidence, knowledge, decisions, traceability, reviews, previousJudgmentId = null, previousJudgmentDigest = null, commitReason = "judgment", changes = [], intents = [], blocker = null) {
     const explicitMissing = [...investigation.explicitRequirements].filter(
       (file) => !investigation.inspectedEvidence.has(file)
     );
@@ -1250,6 +1441,7 @@ function buildEvidenceBlock(
         evidence_refs: Array.isArray(item.evidence_refs) ? item.evidence_refs : [],
       })),
       restrictions,
+      blocker,
     };
   }
 
@@ -1261,4 +1453,6 @@ export {
   surfaceStatus,
   gateJudgment,
   canonicalizeEvidenceRefs,
+  NO_PROGRESS_LIMIT,
+  investigationFingerprint,
 };

@@ -359,7 +359,13 @@ async function testRepeatedEarlyJudgmentCannotBypass() {
     { maxIterations: 5 }
   );
 
-  assert("L9 judgment rejected every attempt", calls >= 4);
+  assert(
+    "L9 no-progress loop terminated early as blocked",
+    calls === 3 &&
+      surface.commit_reason === "no-progress" &&
+      surface.blocker?.reason === "no-progress" &&
+      surface.status === "blocked"
+  );
   assert("L9 cannot bypass to declared", surface.status === "blocked");
   assert(
     "L9 explicit requirement still a gap",
