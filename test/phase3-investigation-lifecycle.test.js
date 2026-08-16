@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
-import { runEos } from "../src/loop.js";
-import { verifyLineage } from "../src/lineage.js";
+import { runEos } from "../src/runtime/run.js";
+import { verifyLineage } from "../src/projection/lineage.js";
 
 const workspace = path.resolve(
   path.dirname(new URL(import.meta.url).pathname),

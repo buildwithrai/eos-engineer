@@ -2,10 +2,10 @@ import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 
-const EVIDENCE_DIR = path.join(".ewa", "engineering", "evidence");
-const DECISIONS_DIR = path.join(".ewa", "engineering", "decisions");
-const TRACEABILITY_FILE = path.join(".ewa", "engineering", "traceability.json");
-const KNOWLEDGE_FILE = path.join(".ewa", "knowledge.json");
+const EVIDENCE_DIR = path.join(".eos", "substrate", "engineering", "evidence");
+const DECISIONS_DIR = path.join(".eos", "substrate", "engineering", "decisions");
+const TRACEABILITY_FILE = path.join(".eos", "substrate", "engineering", "traceability.json");
+const KNOWLEDGE_FILE = path.join(".eos", "substrate", "knowledge.json");
 
 function sha256(content) {
   return crypto.createHash("sha256").update(content).digest("hex");

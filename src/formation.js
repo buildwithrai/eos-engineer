@@ -1,15 +1,15 @@
 import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
-import { sha256 } from "./lineage.js";
+import { sha256 } from "./projection/persistence.js";
 import {
   evidenceDirectory,
   decisionsDirectory,
   traceabilityFile,
   knowledgeFile,
-} from "./evidence.js";
+} from "./investigation/evidence.js";
 import { changesDirectory } from "./change.js";
-import { latestProjectionFile } from "./lineage.js";
+import { latestProjectionFile } from "./projection/persistence.js";
 
 export const INTENT_SCHEMA = "eos-formation-intent/v1";
 
@@ -100,7 +100,7 @@ function hasSourceFile(dir, seen = new Set()) {
  * content anywhere. A workspace with observed/declared substrate, repository
  * knowledge, change records, judgments, or any source file is not greenfield.
  *
- * Hidden directories (.eos, .ewa, .ige, .git) are never treated as content;
+ * Hidden directories (.eos, .ige, .git) are never treated as content;
  * substrate presence is checked explicitly against the known stores.
  *
  * A path that does not exist or is not a directory is never greenfield:
@@ -267,44 +267,7 @@ export function persistIntent(root, intentText) {
   return { intent: record, source: file, digest: sha256(bytes) };
 }
 
-export function intentIdFromRef(ref) {
-  if (typeof ref !== "string") return null;
-
-  if (ref.startsWith("intent:")) {
-    const id = ref.slice("intent:".length).trim();
-    return id.length > 0 ? id : null;
-  }
-
-  const match = ref.match(
-    /(?:^|\/)\.eos\/formation\/records\/([^/]+)\.json$/
-  );
-
-  if (match) return match[1];
-
-  if (
-    ref === ".eos/formation/intent.json" ||
-    ref.endsWith("/.eos/formation/intent.json")
-  ) {
-    return "latest";
-  }
-
-  return null;
-}
-
-export function isIntentRef(ref, intents = []) {
-  const id = intentIdFromRef(ref);
-
-  if (id === null) return false;
-  if (intents.length === 0) return false;
-
-  if (id === "latest") {
-    const ids = intents.map((record) => record.intent.intent_id).sort();
-    const latestId = ids[ids.length - 1];
-    return intents.some((record) => record.intent.intent_id === latestId);
-  }
-
-  return intents.some((record) => record.intent.intent_id === id);
-}
+export { intentIdFromRef, isIntentRef } from "./judgment/refs.js";
 
 export function isPersistedIntentRef(ref, workspaceRoot) {
   if (typeof ref !== "string") return false;

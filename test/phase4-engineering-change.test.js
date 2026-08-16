@@ -1,7 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
-import { runEos } from "../src/loop.js";
-import { sha256, verifyLineage } from "../src/lineage.js";
+import { runEos } from "../src/runtime/run.js";
+import { sha256 } from "../src/projection/persistence.js";
+import { verifyLineage } from "../src/projection/lineage.js";
 import {
   createChange,
   authorizeChange,
@@ -519,11 +520,11 @@ async function testNoExecutionPrimitive() {
 
   const changeSource = fs.readFileSync(new URL("../src/change.js", import.meta.url), "utf8");
   const executionSource = fs.readFileSync(new URL("../src/execution.js", import.meta.url), "utf8");
-  const loopSource = fs.readFileSync(new URL("../src/loop.js", import.meta.url), "utf8");
+  const loopSource = fs.readFileSync(new URL("../src/runtime/run.js", import.meta.url), "utf8");
 
   assert("T14 no opencode coupling in change.js", !changeSource.toLowerCase().includes("opencode") && !changeSource.toLowerCase().includes("cline"));
   assert("T14 no opencode coupling in execution.js", !executionSource.toLowerCase().includes("opencode") && !executionSource.toLowerCase().includes("cline"));
-  assert("T14 no opencode coupling in loop.js", !loopSource.toLowerCase().includes("opencode") && !loopSource.toLowerCase().includes("cline"));
+  assert("T14 no opencode coupling in runtime loop", !loopSource.toLowerCase().includes("opencode") && !loopSource.toLowerCase().includes("cline"));
   assert("T14 EOS never runs commands", !changeSource.includes("run_command") && !executionSource.includes("run_command"));
 }
 

@@ -3,8 +3,9 @@ import path from "node:path";
 import crypto from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
-import { runEos } from "../src/loop.js";
-import { verifyLineage, sha256, serializeProjection } from "../src/lineage.js";
+import { runEos } from "../src/runtime/run.js";
+import { verifyLineage } from "../src/projection/lineage.js";
+import { sha256, serializeProjection } from "../src/projection/persistence.js";
 
 const workspace = path.resolve(
   path.dirname(new URL(import.meta.url).pathname),
@@ -96,7 +97,7 @@ function readLatest() {
 }
 
 function ewaSnapshot() {
-  const dir = path.join(workspace, ".ewa");
+  const dir = path.join(workspace, ".eos", "substrate");
 
   if (!fs.existsSync(dir)) return {};
 
@@ -289,6 +290,7 @@ async function testFreshProcessReconstruction() {
       path.dirname(new URL(import.meta.url).pathname),
       "..",
       "src",
+      "projection",
       "lineage.js"
     )
   ).href;
@@ -416,11 +418,11 @@ async function testIllegalTransitionNoNode() {
 async function testDecisionIdAsEvidenceRejected() {
   freshWorkspace();
 
-  fs.mkdirSync(path.join(workspace, ".ewa", "engineering", "decisions"), {
+  fs.mkdirSync(path.join(workspace, ".eos", "substrate", "engineering", "decisions"), {
     recursive: true,
   });
   fs.writeFileSync(
-    path.join(workspace, ".ewa", "engineering", "decisions", "dec1.json"),
+    path.join(workspace, ".eos", "substrate", "engineering", "decisions", "dec1.json"),
     JSON.stringify(
       {
         id: "DEC-1",
@@ -943,15 +945,15 @@ async function testFallbackCommitReason() {
 async function testEwaSubstratePreserved() {
   freshWorkspace();
 
-  fs.mkdirSync(path.join(workspace, ".ewa", "engineering", "evidence"), {
+  fs.mkdirSync(path.join(workspace, ".eos", "substrate", "engineering", "evidence"), {
     recursive: true,
   });
-  fs.mkdirSync(path.join(workspace, ".ewa", "engineering", "decisions"), {
+  fs.mkdirSync(path.join(workspace, ".eos", "substrate", "engineering", "decisions"), {
     recursive: true,
   });
 
   fs.writeFileSync(
-    path.join(workspace, ".ewa", "engineering", "evidence", "ev1.json"),
+    path.join(workspace, ".eos", "substrate", "engineering", "evidence", "ev1.json"),
     JSON.stringify(
       { id: "EV-1", subject: "subject", attempted: "attempt", observed: "observed", outcome: "ok" },
       null,
@@ -960,7 +962,7 @@ async function testEwaSubstratePreserved() {
   );
 
   fs.writeFileSync(
-    path.join(workspace, ".ewa", "engineering", "decisions", "dec1.json"),
+    path.join(workspace, ".eos", "substrate", "engineering", "decisions", "dec1.json"),
     JSON.stringify(
       { id: "DEC-1", title: "title", status: "accepted", decision: "yes", relatedArtifacts: [] },
       null,
@@ -969,7 +971,7 @@ async function testEwaSubstratePreserved() {
   );
 
   fs.writeFileSync(
-    path.join(workspace, ".ewa", "engineering", "traceability.json"),
+    path.join(workspace, ".eos", "substrate", "engineering", "traceability.json"),
     JSON.stringify(
       [
         {
@@ -987,7 +989,7 @@ async function testEwaSubstratePreserved() {
   );
 
   fs.writeFileSync(
-    path.join(workspace, ".ewa", "knowledge.json"),
+    path.join(workspace, ".eos", "substrate", "knowledge.json"),
     JSON.stringify(
       {
         knowledge: {
@@ -1018,7 +1020,7 @@ async function testEwaSubstratePreserved() {
 
   const after = ewaSnapshot();
   assert(
-    ".ewa files are byte-identical across a run",
+    ".eos substrate files are byte-identical across a run",
     JSON.stringify(before) === JSON.stringify(after)
   );
 
@@ -1027,7 +1029,7 @@ async function testEwaSubstratePreserved() {
     surface.evidence.evidence.some(
       (item) =>
         item.id === "EV-1" &&
-        item.digest === before[".ewa/engineering/evidence/ev1.json"]
+        item.digest === before[".eos/substrate/engineering/evidence/ev1.json"]
     )
   );
   assert(
@@ -1035,18 +1037,18 @@ async function testEwaSubstratePreserved() {
     surface.evidence.decisions.some(
       (item) =>
         item.id === "DEC-1" &&
-        item.digest === before[".ewa/engineering/decisions/dec1.json"]
+        item.digest === before[".eos/substrate/engineering/decisions/dec1.json"]
     )
   );
   assert(
     "surface records traceability digest matching substrate",
     surface.evidence.traceability !== undefined &&
-      surface.evidence.traceability.digest === before[".ewa/engineering/traceability.json"]
+      surface.evidence.traceability.digest === before[".eos/substrate/engineering/traceability.json"]
   );
   assert(
     "surface records knowledge digest matching substrate",
     surface.evidence.knowledge !== undefined &&
-      surface.evidence.knowledge.digest === before[".ewa/knowledge.json"]
+      surface.evidence.knowledge.digest === before[".eos/substrate/knowledge.json"]
   );
 }
 

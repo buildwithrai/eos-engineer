@@ -1,8 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
-import { sha256 } from "./lineage.js";
-import { readFile } from "./tools/readFile.js";
+import { sha256 } from "./projection/persistence.js";
+import { readFile } from "./investigation/tools/read-file.js";
 import { validateExecutionReport } from "./execution.js";
 
 export const CHANGE_SCHEMA = "eos-change-node/v1";
@@ -204,55 +204,21 @@ function collectContractPaths(contract) {
 }
 
 /**
- * Creates a change contract record bound to a declared judgment.
+ * Deterministically validate and normalize a change contract's scope and
+ * predicates against an inspected-evidence set.
  *
- * The scope (changed/created/unchanged and predicate paths) must be fully
- * grounded in the source judgment's inspected evidence. EOS does not execute;
- * the change record is a candidate, participant-gated contract.
+ * Shared by createChange (which validates against the source judgment's
+ * inspected evidence) and the runtime change-proposal gate (which validates
+ * against the current investigation). Both paths must enforce the same
+ * contract, so the runtime can reject an inadmissible proposal before the
+ * judgment commits and the model can retry.
+ *
+ * Returns { ok: true, scope, predicates } or { ok: false, message }.
  */
-export function createChange(root, { target, objective, source_judgment_id, scope, predicates, restrictions, supersedes_change_id }) {
-  if (typeof target !== "string" || target.length === 0) {
-    return { ok: false, message: "change target must be a non-empty string" };
-  }
-
-  if (typeof objective !== "string" || objective.length === 0) {
-    return { ok: false, message: "change objective must be a non-empty string" };
-  }
-
-  if (typeof source_judgment_id !== "string" || source_judgment_id.length === 0) {
-    return { ok: false, message: "change source_judgment_id must be a non-empty string" };
-  }
-
+function validateChangeContract(root, { scope, predicates, inspected }) {
   if (scope === null || typeof scope !== "object" || Array.isArray(scope)) {
     return { ok: false, message: "change scope must be an object" };
   }
-
-  if (
-    typeof supersedes_change_id === "string" &&
-    supersedes_change_id.length > 0
-  ) {
-    const superseded = loadChange(root, supersedes_change_id);
-
-    if (superseded === null) {
-      return { ok: false, message: `supersedes_change_id "${supersedes_change_id}" does not exist` };
-    }
-
-    if (superseded.status !== "failed") {
-      return { ok: false, message: `only a failed change may be superseded ("${supersedes_change_id}" is ${superseded.status})` };
-    }
-  }
-
-  const source = loadJudgmentNode(root, source_judgment_id);
-
-  if (source === null) {
-    return { ok: false, message: `source judgment "${source_judgment_id}" does not exist` };
-  }
-
-  if (source.node.status !== "declared") {
-    return { ok: false, message: `source judgment "${source_judgment_id}" is not declared; a change contract requires a committed judgment` };
-  }
-
-  const inspected = (source.node.investigation?.inspected_evidence ?? []).map(normalizePath);
 
   const normalizedScope = { changed: [], created: [], unchanged: [] };
 
@@ -324,6 +290,146 @@ export function createChange(root, { target, objective, source_judgment_id, scop
     normalizedPredicates.push({ path: predicatePath, contains: predicate.contains });
   }
 
+  return { ok: true, scope: normalizedScope, predicates: normalizedPredicates };
+}
+
+/**
+ * Runtime gate for a model-generated change proposal carried on a judgment
+ * response.
+ *
+ * A change proposal is admitted only when the accepted judgment commits as
+ * declared, and its scope/predicates must be grounded in the investigation's
+ * inspected evidence. The authoritative creation still runs through
+ * createChange after the judgment node commits; this gate exists so an
+ * inadmissible proposal is rejected before the judgment commits and the model
+ * can retry.
+ *
+ * Returns { ok: true, proposal } (normalized) or { ok: false, message }.
+ */
+export function gateChangeProposal(proposal, investigation, workspaceRoot, judgmentStatus) {
+  if (proposal === null || typeof proposal !== "object" || Array.isArray(proposal)) {
+    return { ok: false, message: "A change proposal must be an object." };
+  }
+
+  if (judgmentStatus !== "declared") {
+    return {
+      ok: false,
+      message: `A change proposal requires the judgment to commit as declared, but this judgment commits as "${judgmentStatus}". Drop the change field, or re-judge as declared.`,
+    };
+  }
+
+  if (typeof proposal.target !== "string" || proposal.target.length === 0) {
+    return { ok: false, message: "A change proposal requires a non-empty target." };
+  }
+
+  if (typeof proposal.objective !== "string" || proposal.objective.length === 0) {
+    return { ok: false, message: "A change proposal requires a non-empty objective." };
+  }
+
+  if (
+    proposal.requested_actor !== undefined &&
+    proposal.requested_actor !== null &&
+    (typeof proposal.requested_actor !== "string" || proposal.requested_actor.trim().length === 0)
+  ) {
+    return { ok: false, message: "A change proposal requested_actor must be a non-empty string when present." };
+  }
+
+  const validated = validateChangeContract(workspaceRoot, {
+    scope: proposal.scope,
+    predicates: proposal.predicates,
+    inspected: [...investigation.inspectedEvidence],
+  });
+
+  if (!validated.ok) {
+    return { ok: false, message: `Change proposal rejected: ${validated.message}` };
+  }
+
+  return {
+    ok: true,
+    proposal: {
+      ...proposal,
+      scope: validated.scope,
+      predicates: validated.predicates,
+      requested_actor:
+        typeof proposal.requested_actor === "string" && proposal.requested_actor.trim().length > 0
+          ? proposal.requested_actor.trim()
+          : null,
+    },
+  };
+}
+
+/**
+ * Creates a change contract record bound to a declared judgment.
+ *
+ * The scope (changed/created/unchanged and predicate paths) must be fully
+ * grounded in the source judgment's inspected evidence. EOS does not execute;
+ * the change record is a candidate, participant-gated contract.
+ */
+export function createChange(root, { target, objective, source_judgment_id, scope, predicates, restrictions, requested_actor, supersedes_change_id }) {
+  if (typeof target !== "string" || target.length === 0) {
+    return { ok: false, message: "change target must be a non-empty string" };
+  }
+
+  if (typeof objective !== "string" || objective.length === 0) {
+    return { ok: false, message: "change objective must be a non-empty string" };
+  }
+
+  if (typeof source_judgment_id !== "string" || source_judgment_id.length === 0) {
+    return { ok: false, message: "change source_judgment_id must be a non-empty string" };
+  }
+
+  if (scope === null || typeof scope !== "object" || Array.isArray(scope)) {
+    return { ok: false, message: "change scope must be an object" };
+  }
+
+  if (
+    requested_actor !== undefined &&
+    requested_actor !== null &&
+    (typeof requested_actor !== "string" || requested_actor.trim().length === 0)
+  ) {
+    return { ok: false, message: "change requested_actor must be a non-empty string when present" };
+  }
+
+  if (
+    typeof supersedes_change_id === "string" &&
+    supersedes_change_id.length > 0
+  ) {
+    const superseded = loadChange(root, supersedes_change_id);
+
+    if (superseded === null) {
+      return { ok: false, message: `supersedes_change_id "${supersedes_change_id}" does not exist` };
+    }
+
+    if (superseded.status !== "failed") {
+      return { ok: false, message: `only a failed change may be superseded ("${supersedes_change_id}" is ${superseded.status})` };
+    }
+  }
+
+  const source = loadJudgmentNode(root, source_judgment_id);
+
+  if (source === null) {
+    return { ok: false, message: `source judgment "${source_judgment_id}" does not exist` };
+  }
+
+  if (source.node.status !== "declared") {
+    return { ok: false, message: `source judgment "${source_judgment_id}" is not declared; a change contract requires a committed judgment` };
+  }
+
+  const inspected = (source.node.investigation?.inspected_evidence ?? []).map(normalizePath);
+
+  const contractParts = validateChangeContract(root, {
+    scope,
+    predicates,
+    inspected,
+  });
+
+  if (!contractParts.ok) {
+    return { ok: false, message: contractParts.message };
+  }
+
+  const normalizedScope = contractParts.scope;
+  const normalizedPredicates = contractParts.predicates;
+
   const contract = {
     schema: CONTRACT_SCHEMA,
     target,
@@ -331,6 +437,10 @@ export function createChange(root, { target, objective, source_judgment_id, scop
     scope: normalizedScope,
     predicates: normalizedPredicates,
     restrictions: Array.isArray(restrictions) ? restrictions : [],
+    requested_actor:
+      typeof requested_actor === "string" && requested_actor.trim().length > 0
+        ? requested_actor.trim()
+        : null,
     source_judgment_id: source_judgment_id,
     source_judgment_digest: source.digest,
     supersedes_change_id: supersedes_change_id ?? null,
@@ -486,6 +596,7 @@ function contractFor(change) {
     scope: change.contract.scope,
     predicates: change.contract.predicates,
     restrictions: change.contract.restrictions,
+    requested_actor: change.contract.requested_actor ?? null,
     authorization: change.authorization,
   };
 }
@@ -867,36 +978,8 @@ export function verifyChangeLedger(root) {
   };
 }
 
-export function changeIdFromRef(ref) {
-  if (typeof ref !== "string") return null;
-
-  if (ref.startsWith("change:")) {
-    const id = ref.slice("change:".length).trim();
-    return id.length > 0 ? id : null;
-  }
-
-  const match = ref.match(/(?:^|\/)\.eos\/changes\/([^/]+)\//);
-
-  if (match) return match[1];
-
-  return null;
-}
-
-export function isChangeRef(ref, changes = []) {
-  const id = changeIdFromRef(ref);
-
-  if (id === null) return false;
-
-  return changes.some(
-    (record) => (record.change ?? record).change_id === id
-  );
-}
-
-export function changeVerdictOutcome(change) {
-  if (change === null || typeof change !== "object") return "unresolved";
-
-  if (change.status === "verified") return "forward";
-  if (change.status === "failed") return "regression";
-
-  return "unresolved";
-}
+export {
+  changeIdFromRef,
+  isChangeRef,
+  changeVerdictOutcome,
+} from "./judgment/refs.js";

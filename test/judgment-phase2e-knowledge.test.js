@@ -1,8 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
-import { runEos } from "../src/loop.js";
-import { loadKnowledge } from "../src/evidence.js";
+import { runEos } from "../src/runtime/run.js";
+import { loadKnowledge } from "../src/investigation/evidence.js";
 import {
   buildKnowledgeProjection,
   isKnowledgeRef,
@@ -72,14 +72,14 @@ function writeKnowledge(overrides = {}) {
   };
 
   fs.writeFileSync(
-    path.join(workspace, ".ewa", "knowledge.json"),
+    path.join(workspace, ".eos", "substrate", "knowledge.json"),
     JSON.stringify(knowledge, null, 2) + "\n"
   );
 }
 
 function freshWorkspace(withKnowledge = true) {
   fs.rmSync(workspace, { recursive: true, force: true });
-  fs.mkdirSync(path.join(workspace, ".ewa"), { recursive: true });
+  fs.mkdirSync(path.join(workspace, ".eos", "substrate"), { recursive: true });
   fs.mkdirSync(path.join(workspace, "src"), { recursive: true });
   fs.writeFileSync(path.join(workspace, "src", "index.ts"), "export class Agent {}\n");
   fs.writeFileSync(path.join(workspace, "src", "util.ts"), "export function buildIndex() {}\n");
@@ -238,7 +238,7 @@ async function testProvenance() {
 
   const expectedDigest = crypto
     .createHash("sha256")
-    .update(fs.readFileSync(path.join(workspace, ".ewa", "knowledge.json")))
+    .update(fs.readFileSync(path.join(workspace, ".eos", "substrate", "knowledge.json")))
     .digest("hex");
 
   assert("consumed records knowledge refs", surface.evidence.consumed.includes("symbol:Agent"));
@@ -266,10 +266,10 @@ async function testProjectionDeterministic() {
   );
 
   fs.rmSync(otherWorkspace, { recursive: true, force: true });
-  fs.mkdirSync(path.join(otherWorkspace, ".ewa"), { recursive: true });
+  fs.mkdirSync(path.join(otherWorkspace, ".eos", "substrate"), { recursive: true });
   fs.writeFileSync(
-    path.join(otherWorkspace, ".ewa", "knowledge.json"),
-    fs.readFileSync(path.join(workspace, ".ewa", "knowledge.json"))
+    path.join(otherWorkspace, ".eos", "substrate", "knowledge.json"),
+    fs.readFileSync(path.join(workspace, ".eos", "substrate", "knowledge.json"))
   );
 
   const third = buildKnowledgeProjection(loadKnowledge(otherWorkspace));
@@ -281,17 +281,17 @@ async function testProjectionDeterministic() {
 async function testReadOnly() {
   freshWorkspace();
 
-  const before = snapshot(path.join(workspace, ".ewa"));
+  const before = snapshot(path.join(workspace, ".eos", "substrate"));
 
   const { surface } = await runWithResponses(
     "Judge the repository knowledge.",
     [judgment("candidate", ["symbol:Agent"])]
   );
 
-  const after = snapshot(path.join(workspace, ".ewa"));
+  const after = snapshot(path.join(workspace, ".eos", "substrate"));
 
   assert("judgment committed", surface.status === "candidate");
-  assert(".ewa tree untouched across a run", JSON.stringify(before) === JSON.stringify(after));
+  assert(".eos substrate untouched across a run", JSON.stringify(before) === JSON.stringify(after));
 }
 
 function testRefResolutionModule() {

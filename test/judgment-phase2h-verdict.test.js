@@ -1,8 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
-import { runEos } from "../src/loop.js";
+import { runEos } from "../src/runtime/run.js";
 import { runReview } from "../src/review.js";
-import { verifyLineage, sha256 } from "../src/lineage.js";
+import { verifyLineage } from "../src/projection/lineage.js";
+import { sha256 } from "../src/projection/persistence.js";
 
 const workspace = path.resolve(
   path.dirname(new URL(import.meta.url).pathname),
@@ -41,23 +42,23 @@ const EV_UNR = "44444444-4444-4444-4444-444444444444";
 
 function freshWorkspace() {
   fs.rmSync(workspace, { recursive: true, force: true });
-  fs.mkdirSync(path.join(workspace, ".ewa", "engineering", "evidence"), {
+  fs.mkdirSync(path.join(workspace, ".eos", "substrate", "engineering", "evidence"), {
     recursive: true,
   });
   fs.writeFileSync(
-    path.join(workspace, ".ewa", "engineering", "evidence", `${EV_FWD}.json`),
+    path.join(workspace, ".eos", "substrate", "engineering", "evidence", `${EV_FWD}.json`),
     JSON.stringify(evidenceRecord(EV_FWD, "forward"), null, 2)
   );
   fs.writeFileSync(
-    path.join(workspace, ".ewa", "engineering", "evidence", `${EV_NEU}.json`),
+    path.join(workspace, ".eos", "substrate", "engineering", "evidence", `${EV_NEU}.json`),
     JSON.stringify(evidenceRecord(EV_NEU, "neutral"), null, 2)
   );
   fs.writeFileSync(
-    path.join(workspace, ".ewa", "engineering", "evidence", `${EV_REG}.json`),
+    path.join(workspace, ".eos", "substrate", "engineering", "evidence", `${EV_REG}.json`),
     JSON.stringify(evidenceRecord(EV_REG, "regression"), null, 2)
   );
   fs.writeFileSync(
-    path.join(workspace, ".ewa", "engineering", "evidence", `${EV_UNR}.json`),
+    path.join(workspace, ".eos", "substrate", "engineering", "evidence", `${EV_UNR}.json`),
     JSON.stringify(evidenceRecord(EV_UNR, "unresolved"), null, 2)
   );
 }
@@ -327,7 +328,7 @@ async function testRevisionNodeReviewNoVerdictViolation() {
 async function testSubstrateReadOnlyAcrossVerdictReview() {
   freshWorkspace();
   const before = JSON.stringify(
-    fs.readdirSync(path.join(workspace, ".ewa"), { recursive: true }).sort()
+    fs.readdirSync(path.join(workspace, ".eos", "substrate"), { recursive: true }).sort()
   );
 
   await runWithResponses("Judge the evidence.", [
@@ -336,10 +337,10 @@ async function testSubstrateReadOnlyAcrossVerdictReview() {
   runReview(workspace);
 
   const after = JSON.stringify(
-    fs.readdirSync(path.join(workspace, ".ewa"), { recursive: true }).sort()
+    fs.readdirSync(path.join(workspace, ".eos", "substrate"), { recursive: true }).sort()
   );
 
-  assert(".ewa untouched across verdict cycle", before === after);
+  assert(".eos substrate untouched across verdict cycle", before === after);
 }
 
 async function testReviewDigestAnchoringPreserved() {

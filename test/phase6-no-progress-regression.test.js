@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
-import { runEos, NO_PROGRESS_LIMIT } from "../src/loop.js";
+import { runEos } from "../src/runtime/run.js";
+import { NO_PROGRESS_LIMIT } from "../src/trace/investigation.js";
 import { loadIntents } from "../src/formation.js";
 
 const workspace = path.resolve(

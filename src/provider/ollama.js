@@ -1,4 +1,4 @@
-const EOS_RESPONSE_SCHEMA = {
+export const EOS_RESPONSE_SCHEMA = {
 oneOf: [
 {
 type: "object",
@@ -69,6 +69,51 @@ required: [
 additionalProperties: false
 }
 },
+change: {
+type: "object",
+properties: {
+target: { type: "string" },
+objective: { type: "string" },
+scope: {
+type: "object",
+properties: {
+changed: {
+type: "array",
+items: { type: "string" }
+},
+created: {
+type: "array",
+items: { type: "string" }
+},
+unchanged: {
+type: "array",
+items: { type: "string" }
+}
+},
+required: ["changed", "created", "unchanged"],
+additionalProperties: false
+},
+predicates: {
+type: "array",
+items: {
+type: "object",
+properties: {
+path: { type: "string" },
+contains: { type: "string" }
+},
+required: ["path", "contains"],
+additionalProperties: false
+}
+},
+restrictions: {
+type: "array",
+items: { type: "string" }
+},
+requested_actor: { type: "string" }
+},
+required: ["target", "objective", "scope"],
+additionalProperties: false
+},
 restrictions: {
 type: "array",
 items: { type: "string" }
@@ -123,8 +168,7 @@ export async function chat(
         options: {
           temperature: 0
         }
-      })
-    }
+      })    }
   );
 
   if (!res.ok) {

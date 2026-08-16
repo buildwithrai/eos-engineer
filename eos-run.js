@@ -1,4 +1,4 @@
-import { runEos } from "./src/loop.js";
+import { runEos } from "./src/runtime/run.js";
 
 const workspace = process.argv[2] || process.cwd();
 const input = process.argv[3];

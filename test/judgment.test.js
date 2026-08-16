@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
-import { readFile } from "../src/tools/readFile.js";
-import { runEos } from "../src/loop.js";
+import { readFile } from "../src/investigation/tools/read-file.js";
+import { runEos } from "../src/runtime/run.js";
 
 const workspace = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..", ".tmp-test-workspace");
 

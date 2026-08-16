@@ -1,4 +1,4 @@
-import { readFile } from "./readFile.js";
+import { readFile } from "../investigation/tools/read-file.js";
 
 /**
  * Execute read_file once per path and return each result independently.

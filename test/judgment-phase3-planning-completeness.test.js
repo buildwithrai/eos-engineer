@@ -1,9 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
-import { runEos } from "../src/loop.js";
+import { runEos } from "../src/runtime/run.js";
 import { runReview } from "../src/review.js";
-import { verifyLineage } from "../src/lineage.js";
-import { readFile } from "../src/tools/readFile.js";
+import { verifyLineage } from "../src/projection/lineage.js";
+import { readFile } from "../src/investigation/tools/read-file.js";
 import {
   createInvestigation,
   recordInspection,
@@ -116,7 +116,7 @@ function writeKnowledge(overrides = {}) {
   };
 
   writeFile(
-    ".ewa/knowledge.json",
+    ".eos/substrate/knowledge.json",
     JSON.stringify(knowledge, null, 2) + "\n"
   );
 }

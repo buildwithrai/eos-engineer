@@ -1,7 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
-import { runEos } from "../src/loop.js";
-import { verifyLineage, sha256 } from "../src/lineage.js";
+import { runEos } from "../src/runtime/run.js";
+import { verifyLineage } from "../src/projection/lineage.js";
+import { sha256 } from "../src/projection/persistence.js";
 import { loadReviews, resolveRefOutcome } from "../src/review.js";
 import {
   createChange,

@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { runEos } from "../src/loop.js";
+import { runEos } from "../src/runtime/run.js";
 import {
   detectFormation,
   isGreenfield,

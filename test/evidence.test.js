@@ -8,8 +8,8 @@ import {
   loadTraceability,
   findEvidence,
   evidenceExists,
-} from "../src/evidence.js";
-import { runEos } from "../src/loop.js";
+} from "../src/investigation/evidence.js";
+import { runEos } from "../src/runtime/run.js";
 
 const workspace = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..", ".tmp-evid-workspace");
 
@@ -62,26 +62,26 @@ const TRACEABILITY_LINK = {
 
 function freshWorkspace() {
   fs.rmSync(workspace, { recursive: true, force: true });
-  fs.mkdirSync(path.join(workspace, ".ewa", "engineering", "evidence"), { recursive: true });
+  fs.mkdirSync(path.join(workspace, ".eos", "substrate", "engineering", "evidence"), { recursive: true });
   fs.writeFileSync(
-    path.join(workspace, ".ewa", "engineering", "evidence", `${EVIDENCE_A.id}.json`),
+    path.join(workspace, ".eos", "substrate", "engineering", "evidence", `${EVIDENCE_A.id}.json`),
     JSON.stringify(EVIDENCE_A, null, 2)
   );
   fs.writeFileSync(
-    path.join(workspace, ".ewa", "engineering", "evidence", `${EVIDENCE_B.id}.json`),
+    path.join(workspace, ".eos", "substrate", "engineering", "evidence", `${EVIDENCE_B.id}.json`),
     JSON.stringify(EVIDENCE_B, null, 2)
   );
 }
 
 function freshWorkspaceWithDecisions() {
   freshWorkspace();
-  fs.mkdirSync(path.join(workspace, ".ewa", "engineering", "decisions"), { recursive: true });
+  fs.mkdirSync(path.join(workspace, ".eos", "substrate", "engineering", "decisions"), { recursive: true });
   fs.writeFileSync(
-    path.join(workspace, ".ewa", "engineering", "decisions", `${DECISION_A.id}.json`),
+    path.join(workspace, ".eos", "substrate", "engineering", "decisions", `${DECISION_A.id}.json`),
     JSON.stringify(DECISION_A, null, 2)
   );
   fs.writeFileSync(
-    path.join(workspace, ".ewa", "engineering", "traceability.json"),
+    path.join(workspace, ".eos", "substrate", "engineering", "traceability.json"),
     JSON.stringify([TRACEABILITY_LINK], null, 2)
   );
 }
@@ -128,7 +128,7 @@ function testEvidenceProvenance() {
   const items = loadEvidence(workspace);
 
   const found = findEvidence(items, EVIDENCE_A.id);
-  assert("provenance source is absolute evidence file", found.source.endsWith(path.join(".ewa", "engineering", "evidence", `${EVIDENCE_A.id}.json`)));
+  assert("provenance source is absolute evidence file", found.source.endsWith(path.join(".eos", "substrate", "engineering", "evidence", `${EVIDENCE_A.id}.json`)));
   assert("provenance digest is hex", /^[0-9a-f]{64}$/.test(found.digest));
 
   const expected = crypto.createHash("sha256").update(JSON.stringify(EVIDENCE_A, null, 2)).digest("hex");
@@ -141,21 +141,21 @@ function testEvidenceProvenance() {
 
 function testReadOnly() {
   freshWorkspace();
-  const before = snapshot(path.join(workspace, ".ewa"));
+  const before = snapshot(path.join(workspace, ".eos"));
 
   loadEvidence(workspace);
   loadKnowledge(workspace);
 
-  const after = snapshot(path.join(workspace, ".ewa"));
+  const after = snapshot(path.join(workspace, ".eos"));
   assert("EWA evidence and knowledge untouched after load", JSON.stringify(before) === JSON.stringify(after));
-  assert("no .eos written by adapter", fs.existsSync(path.join(workspace, ".eos")) === false);
+  assert("no EOS substrate mutation by adapter", JSON.stringify(before) === JSON.stringify(after));
 }
 
 function testKnowledge() {
   freshWorkspace();
 
   fs.writeFileSync(
-    path.join(workspace, ".ewa", "knowledge.json"),
+    path.join(workspace, ".eos", "substrate", "knowledge.json"),
     JSON.stringify({
       generatedAt: "2026-08-09T18:30:40.616Z",
       repository: {
@@ -182,12 +182,12 @@ function testKnowledge() {
   assert("knowledge loaded", knowledge !== undefined);
   assert("knowledge generatedAt preserved", knowledge.knowledge.generatedAt === "2026-08-09T18:30:40.616Z");
   assert("knowledge symbols preserved", knowledge.knowledge.symbols[0].name === "Agent");
-  assert("knowledge source is .ewa/knowledge.json", knowledge.source.endsWith(path.join(".ewa", "knowledge.json")));
+  assert("knowledge source is .eos/substrate/knowledge.json", knowledge.source.endsWith(path.join(".eos", "substrate", "knowledge.json")));
 
-  fs.rmSync(path.join(workspace, ".ewa", "knowledge.json"), { force: true });
+  fs.rmSync(path.join(workspace, ".eos", "substrate", "knowledge.json"), { force: true });
   const missing = loadKnowledge(workspace);
   assert("missing knowledge returns undefined", missing === undefined);
-  assert("missing knowledge not created", fs.existsSync(path.join(workspace, ".ewa", "knowledge.json")) === false);
+  assert("missing knowledge not created", fs.existsSync(path.join(workspace, ".eos", "substrate", "knowledge.json")) === false);
 }
 
 async function testGateFabrication() {
@@ -248,7 +248,7 @@ async function testGateRealEvidenceId() {
   assert("evidence block lists evidence", surface.evidence.evidence.length === 2);
   assert("consumed records the cited id", surface.evidence.consumed.includes(EVIDENCE_A.id));
   assert("projection written to .eos only", fs.existsSync(path.join(workspace, ".eos", "judgment.json")));
-  assert("evidence block source is ewa", surface.evidence.source === "ewa");
+  assert("evidence block source is eos", surface.evidence.source === "eos");
   assert("decision provenance in surface", Array.isArray(surface.evidence.decisions) && surface.evidence.decisions.length === 1);
   assert("decision digest in surface", surface.evidence.decisions[0].digest === crypto.createHash("sha256").update(JSON.stringify(DECISION_A, null, 2)).digest("hex"));
   assert("traceability provenance in surface", surface.evidence.traceability !== undefined);
@@ -301,7 +301,7 @@ function testDecisionsProvenance() {
   const items = loadDecisions(workspace);
 
   const decision = items[0];
-  assert("provenance source is absolute decision file", decision.source.endsWith(path.join(".ewa", "engineering", "decisions", `${DECISION_A.id}.json`)));
+  assert("provenance source is absolute decision file", decision.source.endsWith(path.join(".eos", "substrate", "engineering", "decisions", `${DECISION_A.id}.json`)));
   assert("provenance digest is hex", /^[0-9a-f]{64}$/.test(decision.digest));
 
   const expected = crypto.createHash("sha256").update(JSON.stringify(DECISION_A, null, 2)).digest("hex");
@@ -328,7 +328,7 @@ function testTraceabilityProvenance() {
   freshWorkspaceWithDecisions();
   const trace = loadTraceability(workspace);
 
-  assert("provenance source is absolute traceability file", trace.source.endsWith(path.join(".ewa", "engineering", "traceability.json")));
+  assert("provenance source is absolute traceability file", trace.source.endsWith(path.join(".eos", "substrate", "engineering", "traceability.json")));
   assert("provenance digest is hex", /^[0-9a-f]{64}$/.test(trace.digest));
 
   const expected = crypto.createHash("sha256").update(JSON.stringify([TRACEABILITY_LINK], null, 2)).digest("hex");
@@ -337,20 +337,20 @@ function testTraceabilityProvenance() {
 
 function testMissingDecisionsDirectory() {
   freshWorkspace();
-  fs.rmSync(path.join(workspace, ".ewa", "engineering"), { recursive: true, force: true });
+  fs.rmSync(path.join(workspace, ".eos", "substrate", "engineering"), { recursive: true, force: true });
 
   const items = loadDecisions(workspace);
   assert("missing decisions dir returns empty array", Array.isArray(items) && items.length === 0);
-  assert("missing decisions dir not created", fs.existsSync(path.join(workspace, ".ewa", "engineering", "decisions")) === false);
+  assert("missing decisions dir not created", fs.existsSync(path.join(workspace, ".eos", "substrate", "engineering", "decisions")) === false);
 }
 
 function testEmptyDecisionsDirectory() {
   freshWorkspace();
-  fs.mkdirSync(path.join(workspace, ".ewa", "engineering", "decisions"), { recursive: true });
+  fs.mkdirSync(path.join(workspace, ".eos", "substrate", "engineering", "decisions"), { recursive: true });
 
   const items = loadDecisions(workspace);
   assert("empty decisions dir returns empty array", Array.isArray(items) && items.length === 0);
-  assert("empty decisions dir left untouched", fs.existsSync(path.join(workspace, ".ewa", "engineering", "decisions")) === true);
+  assert("empty decisions dir left untouched", fs.existsSync(path.join(workspace, ".eos", "substrate", "engineering", "decisions")) === true);
 }
 
 function testMissingTraceabilityFile() {
@@ -358,17 +358,17 @@ function testMissingTraceabilityFile() {
 
   const trace = loadTraceability(workspace);
   assert("missing traceability returns undefined", trace === undefined);
-  assert("missing traceability file not created", fs.existsSync(path.join(workspace, ".ewa", "engineering", "traceability.json")) === false);
+  assert("missing traceability file not created", fs.existsSync(path.join(workspace, ".eos", "substrate", "engineering", "traceability.json")) === false);
 }
 
 function testReadOnlyDecisionsTraceability() {
   freshWorkspaceWithDecisions();
-  const before = snapshot(path.join(workspace, ".ewa"));
+  const before = snapshot(path.join(workspace, ".eos"));
 
   loadDecisions(workspace);
   loadTraceability(workspace);
 
-  const after = snapshot(path.join(workspace, ".ewa"));
+  const after = snapshot(path.join(workspace, ".eos"));
   assert("EWA tree untouched after decision/traceability load", JSON.stringify(before) === JSON.stringify(after));
 }
 
@@ -407,7 +407,7 @@ function testSurfaceProvenance() {
   freshWorkspaceWithDecisions();
 
   fs.writeFileSync(
-    path.join(workspace, ".ewa", "knowledge.json"),
+    path.join(workspace, ".eos", "substrate", "knowledge.json"),
     JSON.stringify({
       generatedAt: "2026-08-09T18:30:40.616Z",
       repository: { root: workspace, packages: [], sourceFiles: 0 },
@@ -430,7 +430,7 @@ async function testSubstrateBlocks() {
   freshWorkspaceWithDecisions();
 
   fs.writeFileSync(
-    path.join(workspace, ".ewa", "knowledge.json"),
+    path.join(workspace, ".eos", "substrate", "knowledge.json"),
     JSON.stringify({
       generatedAt: "2026-08-09T18:30:40.616Z",
       repository: { root: workspace, packages: ["@ewa/agent"], sourceFiles: 1 },
